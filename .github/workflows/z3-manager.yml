@@ -40,8 +40,15 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           if [ -n "${{ inputs.commit_hash }}" ]; then
-            # Manual trigger: add commit to build queue
-            python3 scripts/scheduling/s3_state.py z3 build-queue add ${{ inputs.commit_hash }}
+            # Manual trigger: check for C++ changes before adding to build queue
+            COMMIT_HASH="${{ inputs.commit_hash }}"
+            if python3 scripts/scheduling/detect_cpp_changes.py https://github.com/Z3Prover/z3.git "$COMMIT_HASH" --token $GITHUB_TOKEN; then
+              echo "✅ Commit $COMMIT_HASH has C++ changes, adding to build queue"
+              python3 scripts/scheduling/s3_state.py z3 build-queue add "$COMMIT_HASH"
+            else
+              echo "❌ Commit $COMMIT_HASH has no C++ changes, skipping"
+              exit 1
+            fi
           else
             # Scheduled run: check commits and update queues
             python3 scripts/scheduling/manager.py z3 https://github.com/Z3Prover/z3.git --token $GITHUB_TOKEN
