@@ -93,7 +93,7 @@
 
 **Size Management**:
 - Manager: When adding new commits, if schedule >= 4, removes oldest fuzzed commit (`fuzz_count > 0`)
-- Fuzzer: After incrementing fuzz count, if schedule > 4 AND all commits unfuzzed (`fuzz_count <= 1`), removes the commit that was just fuzzed
+- Fuzzer: After incrementing fuzz count, if schedule > 4 AND all commits have been fuzzed at most once (`fuzz_count <= 1`), removes the commit that was just fuzzed
 
 **Rationale**: Ensures every commit fuzzed at least once, prevents unbounded growth, prioritizes new commits while maintaining minimum coverage
 
