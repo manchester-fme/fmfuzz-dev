@@ -8,7 +8,7 @@ on:
         required: false
         type: string
   schedule:
-    - cron: '*/30 * * * *'  # Run every 30 minutes
+    - cron: '5,35 * * * *'  # Run every 30 minutes starting at 00:05 (00:05, 00:35, 01:05, 01:35, etc.)
 
 jobs:
   check-build-queue:
@@ -43,10 +43,11 @@ jobs:
           AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
         run: |
           if [ -n "${{ inputs.cvc5_commit_hash }}" ]; then
-            echo "🔨 Adding provided commit to build queue: ${{ inputs.cvc5_commit_hash }}"
-            python scripts/scheduling/s3_state.py cvc5 build-queue add ${{ inputs.cvc5_commit_hash }}
+            COMMIT_HASH="${{ inputs.cvc5_commit_hash }}"
+            echo "🔨 Adding provided commit to build queue: $COMMIT_HASH"
+            python scripts/scheduling/s3_state.py cvc5 build-queue add "$COMMIT_HASH"
             echo "build_needed=true" >> $GITHUB_OUTPUT
-            echo "sha=${{ inputs.cvc5_commit_hash }}" >> $GITHUB_OUTPUT
+            echo "sha=$COMMIT_HASH" >> $GITHUB_OUTPUT
             echo "is_manual_build=true" >> $GITHUB_OUTPUT
           else
             COMMIT_HASH=$(python scripts/scheduling/builder.py cvc5)

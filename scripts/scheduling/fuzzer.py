@@ -60,7 +60,7 @@ def run_fuzzer(solver: str, verify_binary: bool = True) -> Optional[str]:
     try:
         commit = get_least_fuzzed_commit(solver)
         if not commit:
-            print("⏭️  No commits in fuzzing schedule")
+            print("⏭️  No commits in fuzzing schedule", file=sys.stderr)
             return None
         
         if verify_binary:
@@ -73,11 +73,11 @@ def run_fuzzer(solver: str, verify_binary: bool = True) -> Optional[str]:
                 manager.s3_client.head_object(Bucket=manager.bucket, Key=s3_key)
             except ClientError as e:
                 if e.response.get('Error', {}).get('Code') == '404':
-                    print(f"⚠️  Binary not found for commit {commit[:8]}, skipping")
+                    print(f"⚠️  Binary not found for commit {commit[:8]}, skipping", file=sys.stderr)
                     return None
                 raise S3StateError(f"Error checking binary existence: {e}")
         
-        print(f"✅ Selected commit {commit[:8]} for fuzzing")
+        print(f"✅ Selected commit {commit[:8]} for fuzzing", file=sys.stderr)
         return commit
     except S3StateError as e:
         print(f"❌ S3 State Error: {e}", file=sys.stderr)

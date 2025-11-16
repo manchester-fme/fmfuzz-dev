@@ -24,10 +24,10 @@ def run_builder(solver: str) -> Optional[str]:
     try:
         commit = get_next_commit_to_build(solver)
         if commit:
-            print(f"✅ Found commit in queue: {commit}")
+            print(f"✅ Found commit in queue: {commit}", file=sys.stderr)
             return commit
         else:
-            print("⏭️  No commits in build queue")
+            print("⏭️  No commits in build queue", file=sys.stderr)
             return None
     except S3StateError as e:
         print(f"❌ S3 State Error: {e}", file=sys.stderr)
