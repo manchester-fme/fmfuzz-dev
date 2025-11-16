@@ -7,8 +7,6 @@ on:
         description: 'Optional: CVC5 commit hash to build coverage mapping for (defaults to HEAD)'
         required: false
         type: string
-  schedule:
-    - cron: '0 0 1 * *'  # Run on the 1st of every month at midnight UTC (approximately every 30 days)
 
 jobs:
   coverage-analysis:

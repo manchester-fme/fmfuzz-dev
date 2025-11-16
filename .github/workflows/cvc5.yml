@@ -4,14 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       cvc5_commit_hash:
-        description: 'Optional: CVC5 commit hash to add to build queue'
+        description: 'Optional: CVC5 commit hash to build (skips upstream check)'
         required: false
         type: string
   schedule:
-    - cron: '*/30 * * * *'  # Run every 30 minutes
+    - cron: '0 * * * *'  # Run every hour
 
 jobs:
-  check-build-queue:
+  check-upstream:
     runs-on: ubuntu-latest
     outputs:
       build_needed: ${{ steps.set-outputs.outputs.build_needed }}
@@ -22,64 +22,71 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Download last built SHA from artifacts
+        if: inputs.cvc5_commit_hash == ''
+        uses: dawidd6/action-download-artifact@v6
+        id: download-sha
+        continue-on-error: true
         with:
-          python-version: '3.12'
+          name: cvc5-last-sha
+          path: .cache
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: cvc5.yml
       
-      - name: Install dependencies
-        run: pip install boto3
-      
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5.1.0
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-      
-      - name: Check build queue or add manual commit
+      - name: Check upstream or use provided commit
         id: set-outputs
-        env:
-          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
         run: |
           if [ -n "${{ inputs.cvc5_commit_hash }}" ]; then
-            echo "🔨 Adding provided commit to build queue: ${{ inputs.cvc5_commit_hash }}"
-            python scripts/scheduling/s3_state.py cvc5 build-queue add ${{ inputs.cvc5_commit_hash }}
+            echo "🔨 Building provided commit hash: ${{ inputs.cvc5_commit_hash }}"
             echo "build_needed=true" >> $GITHUB_OUTPUT
             echo "sha=${{ inputs.cvc5_commit_hash }}" >> $GITHUB_OUTPUT
             echo "is_manual_build=true" >> $GITHUB_OUTPUT
           else
-            COMMIT_HASH=$(python scripts/scheduling/builder.py cvc5)
-            if [ -n "$COMMIT_HASH" ]; then
-              echo "build_needed=true" >> $GITHUB_OUTPUT
-              echo "sha=$COMMIT_HASH" >> $GITHUB_OUTPUT
-              echo "is_manual_build=false" >> $GITHUB_OUTPUT
-            else
-              echo "build_needed=false" >> $GITHUB_OUTPUT
-              echo "sha=" >> $GITHUB_OUTPUT
-              echo "is_manual_build=false" >> $GITHUB_OUTPUT
-            fi
+            echo "📥 Checking for upstream changes..."
+            # Ensure .cache directory exists
+            mkdir -p .cache
+            ./scripts/check-upstream.sh cvc5 https://github.com/cvc5/cvc5.git
+            echo "build_needed=$(cat .build_status | grep build_needed | cut -d'=' -f2)" >> $GITHUB_OUTPUT
+            echo "sha=$(cat .build_status | grep sha | cut -d'=' -f2)" >> $GITHUB_OUTPUT
+            echo "is_manual_build=false" >> $GITHUB_OUTPUT
           fi
+      
+      - name: Upload last built SHA artifact (keep fresh when no build needed)
+        if: inputs.cvc5_commit_hash == '' && steps.set-outputs.outputs.build_needed == 'false'
+        run: |
+          mkdir -p .cache
+          if [ ! -f ".cache/cvc5_last_sha" ]; then
+            echo "${{ steps.set-outputs.outputs.sha }}" > .cache/cvc5_last_sha
+          fi
+      
+      - name: Upload last built SHA artifact
+        if: inputs.cvc5_commit_hash == '' && steps.set-outputs.outputs.build_needed == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cvc5-last-sha
+          path: .cache/cvc5_last_sha
+          retention-days: 30
+          if-no-files-found: ignore
 
   build-static:
-    needs: check-build-queue
-    if: needs.check-build-queue.outputs.build_needed == 'true'
+    needs: check-upstream
+    if: needs.check-upstream.outputs.build_needed == 'true'
     runs-on: ubuntu-latest
     
     steps:
       - name: Checkout
         uses: actions/checkout@v5
       
-      - name: Prepare CVC5 for commit
+      - name: Prepare CVC5 for specific commit
+        if: inputs.cvc5_commit_hash != ''
         run: |
-          COMMIT_HASH="${{ needs.check-build-queue.outputs.sha }}"
-          echo "🔨 Building commit: $COMMIT_HASH"
+          echo "🔨 Building specific commit: ${{ inputs.cvc5_commit_hash }}"
           if [ -d "cvc5" ]; then
             rm -rf cvc5
           fi
           git clone https://github.com/cvc5/cvc5.git cvc5
           cd cvc5
-          git checkout $COMMIT_HASH
+          git checkout ${{ inputs.cvc5_commit_hash }}
           echo "Checked out commit: $(git rev-parse HEAD)"
           cd ..
       
@@ -135,10 +142,25 @@ jobs:
             --body cvc5/build/artifacts.tar.gz \
             --tagging "Type=Production"
           echo "✅ Uploaded production binary to S3"
+      
+      - name: Update last built SHA artifact
+        if: needs.check-upstream.outputs.is_manual_build != 'true'
+        run: |
+          mkdir -p .cache
+          echo "${{ steps.get-commit.outputs.commit_hash }}" > .cache/cvc5_last_sha
+      
+      - name: Upload last built SHA artifact
+        if: needs.check-upstream.outputs.is_manual_build != 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cvc5-last-sha
+          path: .cache/cvc5_last_sha
+          retention-days: 30
+          overwrite: true
 
   build-static-coverage:
-    needs: check-build-queue
-    if: needs.check-build-queue.outputs.build_needed == 'true'
+    needs: check-upstream
+    if: needs.check-upstream.outputs.build_needed == 'true'
     runs-on: ubuntu-latest
     
     steps:
@@ -160,16 +182,16 @@ jobs:
             echo "Cleaned previous build directory"
           fi
       
-      - name: Prepare CVC5 for commit
+      - name: Prepare CVC5 for specific commit
+        if: inputs.cvc5_commit_hash != ''
         run: |
-          COMMIT_HASH="${{ needs.check-build-queue.outputs.sha }}"
-          echo "🔨 Building commit: $COMMIT_HASH"
+          echo "🔨 Building specific commit: ${{ inputs.cvc5_commit_hash }}"
           if [ -d "cvc5" ]; then
             rm -rf cvc5
           fi
           git clone https://github.com/cvc5/cvc5.git cvc5
           cd cvc5
-          git checkout $COMMIT_HASH
+          git checkout ${{ inputs.cvc5_commit_hash }}
           echo "Checked out commit: $(git rev-parse HEAD)"
           cd ..
       
@@ -230,77 +252,26 @@ jobs:
             --body cvc5/build/artifacts.tar.gz \
             --tagging "Type=Coverage"
           echo "✅ Uploaded coverage binary to S3"
-
-  mark-as-built:
-    needs: [check-build-queue, build-static, build-static-coverage]
-    if: needs.build-static.result == 'success' && needs.build-static-coverage.result == 'success'
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      
-      - name: Install dependencies
-        run: pip install boto3
-      
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5.1.0
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-      
-      - name: Move commit to built state
-        env:
-          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+      - name: Update last built SHA artifact
+        if: needs.check-upstream.outputs.is_manual_build != 'true'
         run: |
-          COMMIT_HASH="${{ needs.check-build-queue.outputs.sha }}"
-          python scripts/scheduling/s3_state.py cvc5 build-queue move-to-built $COMMIT_HASH
-          echo "✅ Moved commit $COMMIT_HASH to built state (both binaries uploaded)"
-
-  mark-as-failed:
-    needs: [check-build-queue, build-static, build-static-coverage]
-    if: |
-      (needs.build-static.result == 'failure' || needs.build-static-coverage.result == 'failure') &&
-      (needs.build-static.result != 'cancelled' && needs.build-static-coverage.result != 'cancelled')
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
+          mkdir -p .cache
+          echo "${{ steps.get-commit.outputs.commit_hash }}" > .cache/cvc5_last_sha
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Upload last built SHA artifact
+        if: needs.check-upstream.outputs.is_manual_build != 'true'
+        uses: actions/upload-artifact@v4
         with:
-          python-version: '3.12'
-      
-      - name: Install dependencies
-        run: pip install boto3
-      
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5.1.0
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-      
-      - name: Move commit to failed state
-        env:
-          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
-        run: |
-          COMMIT_HASH="${{ needs.check-build-queue.outputs.sha }}"
-          python scripts/scheduling/s3_state.py cvc5 build-queue move-to-failed $COMMIT_HASH
-          echo "❌ Moved commit $COMMIT_HASH to failed state (one or both builds failed)"
+          name: cvc5-last-sha
+          path: .cache/cvc5_last_sha
+          retention-days: 30
+          overwrite: true
 
   skip-build:
-    needs: check-build-queue
-    if: needs.check-build-queue.outputs.build_needed == 'false'
+    needs: check-upstream
+    if: needs.check-upstream.outputs.build_needed == 'false'
     runs-on: ubuntu-latest
     steps:
-      - name: Skip build (no commits in queue)
-        run: echo "✅ No commits in build queue - skipping build"
+      - name: Skip build (up to date)
+        run: echo "✅ CVC5 is up to date - skipping build"

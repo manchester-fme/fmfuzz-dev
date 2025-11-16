@@ -20,82 +20,148 @@ on:
     - cron: '30 0,6,12,18 * * *'  # Run every 6 hours at 6:30, 12:30, 18:30, 00:30
 
 jobs:
-  check-fuzzing-schedule:
+  check-upstream:
     runs-on: ubuntu-latest
     outputs:
       fuzzing_needed: ${{ steps.set-outputs.outputs.fuzzing_needed }}
       sha: ${{ steps.set-outputs.outputs.sha }}
       is_manual_run: ${{ steps.set-outputs.outputs.is_manual_run }}
-      binary_available: ${{ steps.set-outputs.outputs.binary_available }}
+      binary_available: ${{ steps.check-binary.outputs.binary_available }}
     
     steps:
       - name: Checkout
         uses: actions/checkout@v5
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - name: Download last fuzzed SHA from artifacts
+        if: github.event_name == 'schedule'
+        uses: dawidd6/action-download-artifact@v6
+        id: download-sha
+        continue-on-error: true
         with:
-          python-version: '3.12'
+          name: z3-last-fuzzed-sha
+          path: .cache
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          workflow: z3-commit-fuzzer.yml
+          check_artifacts: true
+          search_artifacts: true
       
-      - name: Install dependencies
-        run: pip install boto3
+      - name: Check upstream for new commits
+        id: set-outputs-scheduled
+        if: github.event_name == 'schedule'
+        run: |
+          echo "📥 Checking for upstream changes..."
+          # Ensure .cache directory exists
+          mkdir -p .cache
+          ./scripts/check-upstream.sh z3 https://github.com/Z3Prover/z3.git
+          echo "fuzzing_needed=$(cat .build_status | grep build_needed | cut -d'=' -f2)" >> $GITHUB_OUTPUT
+          echo "sha=$(cat .build_status | grep sha | cut -d'=' -f2)" >> $GITHUB_OUTPUT
+          echo "is_manual_run=false" >> $GITHUB_OUTPUT
+      
+      - name: Set manual run outputs
+        id: set-outputs-manual
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "🔨 Manual run triggered"
+          echo "fuzzing_needed=true" >> $GITHUB_OUTPUT
+          echo "sha=${{ inputs.z3_commit_hash }}" >> $GITHUB_OUTPUT
+          echo "is_manual_run=true" >> $GITHUB_OUTPUT
+      
+      - name: Set combined outputs
+        id: set-outputs
+        run: |
+          if [ "${{ github.event_name }}" == "schedule" ]; then
+            FUZZING_NEEDED="${{ steps.set-outputs-scheduled.outputs.fuzzing_needed }}"
+            SHA="${{ steps.set-outputs-scheduled.outputs.sha }}"
+            echo "fuzzing_needed=${FUZZING_NEEDED:-false}" >> $GITHUB_OUTPUT
+            echo "sha=${SHA:-}" >> $GITHUB_OUTPUT
+            echo "is_manual_run=false" >> $GITHUB_OUTPUT
+          else
+            FUZZING_NEEDED="${{ steps.set-outputs-manual.outputs.fuzzing_needed }}"
+            SHA="${{ steps.set-outputs-manual.outputs.sha }}"
+            echo "fuzzing_needed=${FUZZING_NEEDED:-true}" >> $GITHUB_OUTPUT
+            echo "sha=${SHA:-}" >> $GITHUB_OUTPUT
+            echo "is_manual_run=true" >> $GITHUB_OUTPUT
+          fi
       
       - name: Configure AWS credentials
+        if: github.event_name == 'schedule' && steps.set-outputs.outputs.fuzzing_needed == 'true'
         uses: aws-actions/configure-aws-credentials@v5.1.0
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
       
-      - name: Check fuzzing schedule or add manual commit
-        id: set-outputs
-        env:
-          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+      - name: Check if production binary is available in S3
+        id: check-binary-scheduled
+        if: github.event_name == 'schedule' && steps.set-outputs.outputs.fuzzing_needed == 'true'
         run: |
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.z3_commit_hash }}" ]; then
-            echo "🔨 Adding provided commit to fuzzing schedule: ${{ inputs.z3_commit_hash }}"
-            python scripts/scheduling/s3_state.py z3 fuzzing-schedule add ${{ inputs.z3_commit_hash }}
-            echo "fuzzing_needed=true" >> $GITHUB_OUTPUT
-            echo "sha=${{ inputs.z3_commit_hash }}" >> $GITHUB_OUTPUT
-            echo "is_manual_run=true" >> $GITHUB_OUTPUT
+          SHA="${{ steps.set-outputs.outputs.sha }}"
+          S3_KEY="solvers/z3/builds/production/${SHA}.tar.gz"
+          
+          if aws s3api head-object \
+            --bucket ${{ secrets.AWS_S3_BUCKET }} \
+            --key "$S3_KEY" >/dev/null 2>&1; then
+            echo "✅ Production binary available in S3 for commit ${SHA}"
             echo "binary_available=true" >> $GITHUB_OUTPUT
           else
-            COMMIT_HASH=$(python scripts/scheduling/fuzzer.py z3 select)
-            if [ -n "$COMMIT_HASH" ]; then
-              echo "✅ Found commit in fuzzing schedule: $COMMIT_HASH"
-              echo "fuzzing_needed=true" >> $GITHUB_OUTPUT
-              echo "sha=$COMMIT_HASH" >> $GITHUB_OUTPUT
-              echo "is_manual_run=false" >> $GITHUB_OUTPUT
-              echo "binary_available=true" >> $GITHUB_OUTPUT
-            else
-              echo "⏭️  No commits in fuzzing schedule or binary not available"
-              echo "fuzzing_needed=false" >> $GITHUB_OUTPUT
-              echo "sha=" >> $GITHUB_OUTPUT
-              echo "is_manual_run=false" >> $GITHUB_OUTPUT
-              echo "binary_available=false" >> $GITHUB_OUTPUT
-            fi
+            echo "❌ Production binary not found in S3 for commit ${SHA}"
+            echo "binary_available=false" >> $GITHUB_OUTPUT
           fi
+      
+      - name: Set binary available for manual runs
+        id: check-binary-manual
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          echo "binary_available=true" >> $GITHUB_OUTPUT
+      
+      - name: Set combined binary availability
+        id: check-binary
+        run: |
+          if [ "${{ github.event_name }}" == "schedule" ]; then
+            BINARY_AVAILABLE="${{ steps.check-binary-scheduled.outputs.binary_available }}"
+            echo "binary_available=${BINARY_AVAILABLE:-false}" >> $GITHUB_OUTPUT
+          else
+            BINARY_AVAILABLE="${{ steps.check-binary-manual.outputs.binary_available }}"
+            echo "binary_available=${BINARY_AVAILABLE:-true}" >> $GITHUB_OUTPUT
+          fi
+      
+      - name: Upload last fuzzed SHA artifact (keep fresh when no fuzzing needed)
+        if: github.event_name == 'schedule' && steps.set-outputs.outputs.fuzzing_needed == 'false'
+        run: |
+          mkdir -p .cache
+          if [ ! -f ".cache/z3_last_fuzzed_sha" ]; then
+            echo "${{ steps.set-outputs.outputs.sha }}" > .cache/z3_last_fuzzed_sha
+          fi
+      
+      - name: Upload last fuzzed SHA artifact
+        if: github.event_name == 'schedule' && steps.set-outputs.outputs.fuzzing_needed == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: z3-last-fuzzed-sha
+          path: .cache/z3_last_fuzzed_sha
+          retention-days: 30
+          if-no-files-found: ignore
 
   skip-fuzzing:
-    needs: check-fuzzing-schedule
+    needs: check-upstream
     if: |
       github.event_name == 'schedule' &&
-      (needs.check-fuzzing-schedule.outputs.fuzzing_needed == 'false' || needs.check-fuzzing-schedule.outputs.binary_available == 'false')
+      (needs.check-upstream.outputs.fuzzing_needed == 'false' || needs.check-upstream.outputs.binary_available == 'false')
     runs-on: ubuntu-latest
     steps:
       - name: Skip fuzzing
         run: |
-          if [ "${{ needs.check-fuzzing-schedule.outputs.fuzzing_needed }}" == "false" ]; then
-            echo "✅ No commits in fuzzing schedule - skipping fuzzing"
+          if [ "${{ needs.check-upstream.outputs.fuzzing_needed }}" == "false" ]; then
+            echo "✅ Z3 is up to date - skipping fuzzing"
           else
             echo "❌ Production binary not available - skipping fuzzing"
           fi
 
   commit-fuzzer:
-    needs: check-fuzzing-schedule
+    needs: check-upstream
     if: |
       (github.event_name == 'workflow_dispatch') ||
-      (github.event_name == 'schedule' && needs.check-fuzzing-schedule.outputs.fuzzing_needed == 'true' && needs.check-fuzzing-schedule.outputs.binary_available == 'true')
+      (github.event_name == 'schedule' && needs.check-upstream.outputs.fuzzing_needed == 'true' && needs.check-upstream.outputs.binary_available == 'true')
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.extract-tests.outputs.matrix }}
@@ -164,10 +230,17 @@ jobs:
       - name: Checkout specific commit
         working-directory: z3
         run: |
-          COMMIT_HASH="${{ needs.check-fuzzing-schedule.outputs.sha }}"
-          echo "🔨 Checking out commit: $COMMIT_HASH"
-          git fetch origin
-          git checkout $COMMIT_HASH
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.z3_commit_hash }}" ]; then
+            echo "🔨 Checking out provided commit: ${{ inputs.z3_commit_hash }}"
+            git fetch origin
+            git checkout ${{ inputs.z3_commit_hash }}
+          elif [ "${{ github.event_name }}" == "schedule" ]; then
+            echo "🔨 Checking out commit from upstream check: ${{ needs.check-upstream.outputs.sha }}"
+            git fetch origin
+            git checkout ${{ needs.check-upstream.outputs.sha }}
+          else
+            echo "Using current HEAD"
+          fi
           echo "Checked out commit: $(git rev-parse HEAD)"
 
       - name: Get Z3 commit hash
@@ -334,6 +407,23 @@ jobs:
             echo "Matrix created with $TOTAL_JOBS jobs for $TOTAL_TESTS tests"
           fi
       
+      - name: Update last fuzzed SHA (always record, even if no functions found)
+        if: github.event_name == 'schedule'
+        working-directory: z3
+        run: |
+          mkdir -p ../.cache
+          COMMIT_HASH=$(git rev-parse HEAD)
+          echo "$COMMIT_HASH" > ../.cache/z3_last_fuzzed_sha
+          echo "✅ Recorded last fuzzed SHA: $COMMIT_HASH (even if no functions were found)"
+      
+      - name: Upload last fuzzed SHA artifact
+        if: github.event_name == 'schedule'
+        uses: actions/upload-artifact@v4
+        with:
+          name: z3-last-fuzzed-sha
+          path: .cache/z3_last_fuzzed_sha
+          retention-days: 30
+          overwrite: true
 
   fuzzer-jobs:
     needs: commit-fuzzer
@@ -608,35 +698,4 @@ jobs:
         if: steps.combine-bugs.outputs.bugs_found != 'true'
         run: |
           echo "✅ No bugs found in this run, skipping S3 upload"
-
-  update-fuzz-count:
-    needs: [check-fuzzing-schedule, commit-fuzzer, collect-bugs]
-    if: always() && needs.commit-fuzzer.result == 'success'
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
-      
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      
-      - name: Install dependencies
-        run: pip install boto3
-      
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5.1.0
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-      
-      - name: Increment fuzz count and manage schedule
-        env:
-          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
-        run: |
-          COMMIT_HASH="${{ needs.check-fuzzing-schedule.outputs.sha }}"
-          python scripts/scheduling/fuzzer.py z3 increment $COMMIT_HASH
 
