@@ -8,7 +8,7 @@ on:
         required: false
         type: string
   schedule:
-    - cron: '*/30 * * * *'  # Run every 30 minutes
+    - cron: '5,35 * * * *'  # Run every 30 minutes starting at 00:05 (00:05, 00:35, 01:05, 01:35, etc.)
 
 jobs:
   check-build-queue:

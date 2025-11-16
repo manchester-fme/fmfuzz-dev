@@ -17,7 +17,7 @@ on:
         type: number
         default: 5
   schedule:
-    - cron: '30 0,6,12,18 * * *'  # Run every 6 hours at 6:30, 12:30, 18:30, 00:30
+    - cron: '45 0,6,12,18 * * *'  # Run every 6 hours starting at 00:45 (00:45, 06:45, 12:45, 18:45)
 
 jobs:
   check-fuzzing-schedule:
