@@ -174,6 +174,50 @@ class SimpleCommitFuzzer:
             gc.collect()
         except Exception:
             pass
+        
+        # Also kill high memory processes on warnings to prevent escalation
+        # This helps catch orphaned processes from typefuzz before they consume too much memory
+        try:
+            main_pid = os.getpid()
+            worker_pids = set()
+            if hasattr(self, 'workers'):
+                for w in self.workers:
+                    try:
+                        worker_pids.add(w.pid)
+                    except (AttributeError, ValueError):
+                        pass
+            
+            # Build set of all PIDs we should track (main, workers, and all their descendants)
+            tracked_pids = {main_pid}
+            tracked_pids.update(worker_pids)
+            for pid in list(tracked_pids):
+                tracked_pids.update(self._get_all_descendant_pids(pid))
+            
+            killed_count = 0
+            for pid in tracked_pids:
+                try:
+                    proc = psutil.Process(pid)
+                    proc_info = proc.as_dict(['name', 'memory_info', 'cmdline'])
+                    rss_mb = proc_info.get('memory_info', {}).rss / (1024 * 1024) if proc_info.get('memory_info') else 0.0
+                    
+                    if rss_mb > self.RESOURCE_CONFIG['max_process_memory_mb']:
+                        cmdline = ' '.join(proc_info.get('cmdline', [])) if proc_info.get('cmdline') else ''
+                        name = proc_info.get('name', 'unknown')
+                        print(f"[RESOURCE] [WARNING] Killing process {pid} ({name}) using {rss_mb:.1f}MB (threshold: {self.RESOURCE_CONFIG['max_process_memory_mb']}MB)", file=sys.stderr)
+                        if cmdline:
+                            print(f"  Command: {cmdline[:200]}", file=sys.stderr)
+                        try:
+                            proc.kill()
+                            killed_count += 1
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                except (psutil.NoSuchProcess, psutil.AccessDenied, KeyError, AttributeError):
+                    pass
+            
+            if killed_count > 0:
+                print(f"[RESOURCE] [WARNING] Killed {killed_count} process(es) exceeding memory threshold", file=sys.stderr)
+        except Exception as e:
+            print(f"[WARN] Error killing processes on warning: {e}", file=sys.stderr)
     
     def _get_all_descendant_pids(self, pid):
         """Recursively get all descendant PIDs of a process"""
@@ -326,6 +370,8 @@ class SimpleCommitFuzzer:
         except Exception:
             pass
         
+        # Kill high memory processes using recursive descendant tracking
+        # This catches orphaned solver processes that typefuzz doesn't clean up
         try:
             main_pid = os.getpid()
             worker_pids = set()
@@ -336,16 +382,35 @@ class SimpleCommitFuzzer:
                     except (AttributeError, ValueError):
                         pass
             
-            for proc in psutil.process_iter(['pid', 'name', 'memory_info', 'ppid']):
+            # Build set of all PIDs we should track (main, workers, and all their descendants)
+            tracked_pids = {main_pid}
+            tracked_pids.update(worker_pids)
+            for pid in list(tracked_pids):
+                tracked_pids.update(self._get_all_descendant_pids(pid))
+            
+            killed_count = 0
+            for pid in tracked_pids:
                 try:
-                    proc_info = proc.info
-                    if proc_info['ppid'] == main_pid or proc_info['ppid'] in worker_pids:
-                        rss_mb = proc_info['memory_info'].rss / (1024 * 1024)
-                        if rss_mb > self.RESOURCE_CONFIG['max_process_memory_mb']:
-                            print(f"[RESOURCE] Killing process {proc_info['pid']} ({proc_info['name']}) using {rss_mb:.1f}MB", file=sys.stderr)
+                    proc = psutil.Process(pid)
+                    proc_info = proc.as_dict(['name', 'memory_info', 'cmdline'])
+                    rss_mb = proc_info.get('memory_info', {}).rss / (1024 * 1024) if proc_info.get('memory_info') else 0.0
+                    
+                    if rss_mb > self.RESOURCE_CONFIG['max_process_memory_mb']:
+                        cmdline = ' '.join(proc_info.get('cmdline', [])) if proc_info.get('cmdline') else ''
+                        name = proc_info.get('name', 'unknown')
+                        print(f"[RESOURCE] Killing process {pid} ({name}) using {rss_mb:.1f}MB (threshold: {self.RESOURCE_CONFIG['max_process_memory_mb']}MB)", file=sys.stderr)
+                        if cmdline:
+                            print(f"  Command: {cmdline[:200]}", file=sys.stderr)
+                        try:
                             proc.kill()
-                except (psutil.NoSuchProcess, psutil.AccessDenied, KeyError):
+                            killed_count += 1
+                        except (psutil.NoSuchProcess, psutil.AccessDenied):
+                            pass
+                except (psutil.NoSuchProcess, psutil.AccessDenied, KeyError, AttributeError):
                     pass
+            
+            if killed_count > 0:
+                print(f"[RESOURCE] Killed {killed_count} process(es) exceeding memory threshold", file=sys.stderr)
         except Exception as e:
             print(f"[WARN] Error killing processes: {e}", file=sys.stderr)
         
