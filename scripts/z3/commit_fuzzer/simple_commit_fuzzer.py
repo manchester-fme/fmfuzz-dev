@@ -186,6 +186,11 @@ class SimpleCommitFuzzer:
         except Exception as e:
             print(f"[RESOURCE] Critical resource usage detected - CPU: {avg_cpu:.1f}% avg, Memory: {memory_percent:.1f}% - taking action (error formatting details: {e})", file=sys.stderr)
         
+        # If memory is critical, stop immediately to preserve bugs
+        if memory_percent >= self.RESOURCE_CONFIG['memory_critical']:
+            self._log_bugs_summary_and_stop()
+            return
+        
         with self.resource_lock:
             self.resource_state['paused'] = True
         
@@ -221,6 +226,80 @@ class SimpleCommitFuzzer:
         
         with self.resource_lock:
             self.resource_state['paused'] = False
+    
+    def _calculate_folder_size_mb(self, folder_path: Path) -> float:
+        """Calculate total size of a folder in MB"""
+        try:
+            if folder_path.exists():
+                size_bytes = sum(f.stat().st_size for f in folder_path.rglob('*') if f.is_file())
+                return size_bytes / (1024 * 1024)
+            else:
+                return 0.0
+        except Exception:
+            return 0.0
+    
+    def _log_bugs_summary_and_stop(self):
+        """Log bugs summary from all folders and stop gracefully"""
+        print("\n" + "=" * 60, file=sys.stderr)
+        print("CRITICAL MEMORY DETECTED - STOPPING TO PRESERVE BUGS", file=sys.stderr)
+        print("=" * 60, file=sys.stderr)
+        
+        # Collect bugs from main bugs folder
+        main_bugs = self._collect_bug_files(self.bugs_folder)
+        main_bug_count = len(main_bugs)
+        main_bugs_size_mb = self._calculate_folder_size_mb(self.bugs_folder)
+        
+        # Collect info from all worker folders
+        total_worker_bugs = 0
+        worker_folders_info = []
+        for worker_id in range(1, self.num_workers + 1):
+            worker_bugs_folder = self.bugs_folder / f"worker_{worker_id}"
+            worker_bugs = self._collect_bug_files(worker_bugs_folder)
+            worker_bug_count = len(worker_bugs)
+            total_worker_bugs += worker_bug_count
+            
+            # Calculate sizes for all worker folders
+            bugs_size_mb = self._calculate_folder_size_mb(worker_bugs_folder)
+            scratch_folder = Path(f"scratch_{worker_id}")
+            scratch_size_mb = self._calculate_folder_size_mb(scratch_folder)
+            log_folder = Path(f"logs_{worker_id}")
+            log_size_mb = self._calculate_folder_size_mb(log_folder)
+            
+            worker_folders_info.append({
+                'id': worker_id,
+                'bugs': worker_bug_count,
+                'bugs_size_mb': bugs_size_mb,
+                'scratch_size_mb': scratch_size_mb,
+                'log_size_mb': log_size_mb,
+                'total_size_mb': bugs_size_mb + scratch_size_mb + log_size_mb
+            })
+        
+        total_bugs = main_bug_count + total_worker_bugs
+        
+        print(f"\nBUGS SUMMARY:", file=sys.stderr)
+        print(f"  Total bugs found: {total_bugs}", file=sys.stderr)
+        print(f"  Main bugs folder: {main_bug_count} bugs, {main_bugs_size_mb:.2f} MB", file=sys.stderr)
+        print(f"  Worker folders:", file=sys.stderr)
+        for info in worker_folders_info:
+            print(f"    worker_{info['id']}:", file=sys.stderr)
+            print(f"      bugs: {info['bugs']} bugs, {info['bugs_size_mb']:.2f} MB", file=sys.stderr)
+            print(f"      scratch: {info['scratch_size_mb']:.2f} MB", file=sys.stderr)
+            print(f"      logs: {info['log_size_mb']:.2f} MB", file=sys.stderr)
+            print(f"      total: {info['total_size_mb']:.2f} MB", file=sys.stderr)
+        
+        print(f"\nSTATISTICS:", file=sys.stderr)
+        print(f"  Tests processed: {self.stats.get('tests_processed', 0)}", file=sys.stderr)
+        print(f"  Bugs found: {self.stats.get('bugs_found', 0)}", file=sys.stderr)
+        print(f"  Tests requeued (bugs found): {self.stats.get('tests_requeued', 0)}", file=sys.stderr)
+        print(f"  Tests removed (unsupported): {self.stats.get('tests_removed_unsupported', 0)}", file=sys.stderr)
+        print(f"  Tests removed (timeout): {self.stats.get('tests_removed_timeout', 0)}", file=sys.stderr)
+        
+        print("\n" + "=" * 60, file=sys.stderr)
+        print("Stopping fuzzer to preserve found bugs...", file=sys.stderr)
+        print("=" * 60 + "\n", file=sys.stderr)
+        
+        # Stop all workers gracefully
+        self.shutdown_event.set()
     
     def _check_resource_state(self) -> str:
         with self.resource_lock:

@@ -362,6 +362,9 @@ jobs:
             python3-pip \
             unzip \
             wget
+          # Clean up apt cache to save space
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
 
       - name: Install fuzzing dependencies
         run: |
@@ -370,6 +373,9 @@ jobs:
           git clone https://github.com/testsmt/yinyang.git
           cd yinyang
           pip install -e .
+          cd ..
+          # Clean up pip cache
+          pip cache purge || true
 
       - name: Install CVC5 oracle
         env:
@@ -405,21 +411,6 @@ jobs:
             git clone https://github.com/z3prover/z3test.git z3test
           fi
 
-      - name: Clone Z3 repository
-        run: |
-          if [ -d "z3" ]; then
-            echo "Z3 directory already exists, skipping clone"
-          else
-            git clone https://github.com/Z3Prover/z3.git z3
-          fi
-
-      - name: Checkout same commit as first job
-        working-directory: z3
-        run: |
-          git fetch origin
-          git checkout ${{ needs.commit-fuzzer.outputs.commit_hash }}
-          echo "Checked out commit: $(git rev-parse HEAD)"
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5.1.0
         with:
@@ -452,9 +443,14 @@ jobs:
         if: steps.download-production-binary.outputs.binary_available == 'true'
         run: |
           if [ -f "artifacts/artifacts.tar.gz" ]; then
+            # Create z3/build directory structure (extraction script will create it, but ensure parent exists)
+            mkdir -p z3/build
             ./scripts/z3/extract_build_artifacts.sh artifacts/artifacts.tar.gz z3/build false
             if [ -f "z3/build/z3" ]; then
               echo "✅ Production binary extracted successfully"
+              # Remove downloaded artifact to save space
+              rm -f artifacts/artifacts.tar.gz
+              echo "binary_available=true" >> $GITHUB_OUTPUT
             else
               echo "⚠️ Binary extraction failed"
               echo "binary_available=false" >> $GITHUB_OUTPUT
@@ -463,7 +459,38 @@ jobs:
             echo "binary_available=false" >> $GITHUB_OUTPUT
           fi
 
+      - name: Check if Z3 binary exists
+        id: check-z3-binary
+        run: |
+          if [ -f "z3/build/z3" ]; then
+            echo "binary_exists=true" >> $GITHUB_OUTPUT
+            echo "✅ Z3 binary found, skipping repository clone"
+          else
+            echo "binary_exists=false" >> $GITHUB_OUTPUT
+            echo "⚠️ Z3 binary not found, will clone repository for fallback build"
+          fi
+
+      - name: Clone Z3 repository (only if binary not available)
+        if: steps.check-z3-binary.outputs.binary_exists != 'true'
+        run: |
+          if [ -d "z3" ]; then
+            echo "Z3 directory already exists, skipping clone"
+          else
+            git clone https://github.com/Z3Prover/z3.git z3
+          fi
+
+      - name: Checkout same commit as first job (only if needed for build)
+        if: steps.check-z3-binary.outputs.binary_exists != 'true'
+        working-directory: z3
+        run: |
+          git fetch origin
+          git checkout ${{ needs.commit-fuzzer.outputs.commit_hash }}
+          echo "Checked out commit: $(git rev-parse HEAD)"
+          # Clean up git repository to save space (not needed after checkout)
+          rm -rf .git || true
+
       - name: Build z3 static binary (fallback)
+        if: steps.check-z3-binary.outputs.binary_exists != 'true'
         run: |
           if [ ! -f "z3/build/z3" ]; then
             echo "🔨 Building Z3 static binary as fallback (binary not available from S3)"
@@ -471,6 +498,12 @@ jobs:
           else
             echo "✅ Using binary from S3, skipping build"
           fi
+      
+      - name: Clean up git repositories to save space
+        run: |
+          # Remove .git directories from cloned repos (not needed for fuzzing)
+          rm -rf z3test/.git yinyang/.git || true
+          echo "✅ Cleaned up git repositories"
 
       - name: Verify solver binaries
         run: |
