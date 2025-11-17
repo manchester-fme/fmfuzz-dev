@@ -23,10 +23,10 @@ class SimpleCommitFuzzer:
     
     RESOURCE_CONFIG = {
         'cpu_warning': 85.0,
-        'cpu_critical': 95.0,
+        'cpu_critical': 50.0,  # Temporarily lowered to 50% for testing CPU usage
         'memory_warning': 80.0,
         'memory_critical': 90.0,
-        'check_interval': 5,
+        'check_interval': 2,  # Check more frequently (every 2 seconds instead of 5)
         'pause_duration': 10,
         'max_process_memory_mb': 500,
     }

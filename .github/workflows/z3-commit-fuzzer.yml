@@ -520,6 +520,36 @@ jobs:
           # ${{ github.workspace }}/solvers/cvc4-1.6 --version
           # ${{ github.workspace }}/solvers/z3-4.8.7 --version
 
+      - name: Debug - Check disk and memory usage before fuzzing
+        run: |
+          echo "=========================================="
+          echo "DISK AND MEMORY USAGE DEBUG (Job ${{ matrix.job_id }})"
+          echo "=========================================="
+          echo ""
+          echo "📊 Overall disk usage:"
+          df -h
+          echo ""
+          echo "💾 Memory usage:"
+          free -h
+          echo ""
+          echo "📁 Top 20 largest directories:"
+          du -h --max-depth=1 ${{ github.workspace }} 2>/dev/null | sort -rh | head -20 || true
+          echo ""
+          echo "📂 Detailed directory sizes:"
+          echo "  z3test: $(du -sh z3test 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "  z3: $(du -sh z3 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "  yinyang: $(du -sh yinyang 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "  solvers: $(du -sh solvers 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo "  artifacts: $(du -sh artifacts 2>/dev/null | cut -f1 || echo 'N/A')"
+          echo ""
+          echo "🔍 Top memory-consuming processes:"
+          ps aux --sort=-%mem | head -10 || true
+          echo ""
+          echo "🔍 Process tree:"
+          pstree -p || ps auxf | head -20 || true
+          echo ""
+          echo "=========================================="
+
       - name: Run Simple Fuzzer on assigned tests
         working-directory: z3
         run: |
@@ -535,6 +565,7 @@ jobs:
             --job-start-time "$JOB_START" \
             --stop-buffer-minutes ${STOP_BUFFER} \
             --iterations 2147483647 \
+            --workers 3 \
             --z3-path ./build/z3 \
             --cvc5-path $HOME/.local/bin/cvc5
             # Old solver versions are not used for now
