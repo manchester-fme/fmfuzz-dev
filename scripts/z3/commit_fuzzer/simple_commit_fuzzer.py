@@ -28,8 +28,9 @@ class SimpleCommitFuzzer:
         'memory_critical_available_gb': 0.5,  # Critical if less than 500MB available (real low memory)
         'check_interval': 2,  # Check every 2 seconds
         'pause_duration': 10,
-        'max_process_memory_mb': 500,  # Kill processes exceeding 500MB (normal operation)
-        'max_process_memory_mb_warning': 300,  # Stricter threshold (300MB) when memory is low
+        'max_process_memory_mb': 2048,  # Kill processes exceeding 2GB (normal operation) - allows normal solver usage but catches runaway processes
+        'max_process_memory_mb_warning': 1536,  # Stricter threshold (1.5GB) when system memory is low
+        'z3_memory_limit_mb': 2048,  # Z3 memory limit: 2GB per process (4 workers × 2GB = 8GB total)
     }
     
     def __init__(
@@ -492,10 +493,13 @@ class SimpleCommitFuzzer:
             return self.resource_state.get('paused', False)
     
     def _get_solver_clis(self) -> str:
-        solvers = [f"{self.z3_path} smt.threads=1 model_validate=true"]  # Disable parallel solving to reduce resource usage
+        # Limit Z3 to configured RAM per process
+        z3_memory_mb = self.RESOURCE_CONFIG['z3_memory_limit_mb']
+        solvers = [f"{self.z3_path} smt.threads=1 memory_max_size={z3_memory_mb} model_validate=true"]
         # if self.z3_old_path:
         #     solvers.append(str(self.z3_old_path))
         if self.cvc5_path:
+            # CVC5: No built-in memory limit - rely on our process killing mechanism (max_process_memory_mb)
             solvers.append(f"{self.cvc5_path} --check-models --check-proofs --strings-exp")
         # if self.cvc4_path:
         #     solvers.append(str(self.cvc4_path))
