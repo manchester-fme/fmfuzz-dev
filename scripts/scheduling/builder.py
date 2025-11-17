@@ -56,5 +56,6 @@ if __name__ == '__main__':
             print(commit)
             sys.exit(0)
         else:
-            sys.exit(1)
+            # No commit found is not an error - just exit successfully
+            sys.exit(0)
 

@@ -353,6 +353,9 @@ jobs:
             python3-pip \
             unzip \
             wget
+          # Clean up apt cache to save space
+          sudo apt-get clean
+          sudo rm -rf /var/lib/apt/lists/*
 
       - name: Install fuzzing dependencies
         run: |
@@ -362,23 +365,28 @@ jobs:
           git clone https://github.com/testsmt/yinyang.git
           cd yinyang
           pip install -e .
+          cd ..
+          # Clean up pip cache
+          pip cache purge || true
 
       - name: Download solver binaries
         run: |
           mkdir -p ${{ github.workspace }}/solvers
           
-          # Download cvc4-1.6
-          wget -q https://cvc4.cs.stanford.edu/downloads/builds/x86_64-linux-opt/cvc4-1.6-x86_64-linux-opt \
-            -O ${{ github.workspace }}/solvers/cvc4-1.6
-          chmod +x ${{ github.workspace }}/solvers/cvc4-1.6
-          
-          # Download z3-4.8.7
-          wget -q https://github.com/Z3Prover/z3/releases/download/z3-4.8.7/z3-4.8.7-x64-ubuntu-16.04.zip -O /tmp/z3.zip
-          unzip -q /tmp/z3.zip -d /tmp
-          cp /tmp/z3-4.8.7-x64-ubuntu-16.04/bin/z3 ${{ github.workspace }}/solvers/z3-4.8.7
-          cp /tmp/z3-4.8.7-x64-ubuntu-16.04/bin/libz3.so ${{ github.workspace }}/solvers/
-          chmod +x ${{ github.workspace }}/solvers/z3-4.8.7
-          rm -rf /tmp/z3.zip /tmp/z3-4.8.7-x64-ubuntu-16.04
+          # Old solver versions (cvc4, z3-4.8.7) are not needed - they're commented out in the code
+          # Commented out to save space, but kept for reference
+          # # Download cvc4-1.6
+          # wget -q https://cvc4.cs.stanford.edu/downloads/builds/x86_64-linux-opt/cvc4-1.6-x86_64-linux-opt \
+          #   -O ${{ github.workspace }}/solvers/cvc4-1.6
+          # chmod +x ${{ github.workspace }}/solvers/cvc4-1.6
+          # 
+          # # Download z3-4.8.7
+          # wget -q https://github.com/Z3Prover/z3/releases/download/z3-4.8.7/z3-4.8.7-x64-ubuntu-16.04.zip -O /tmp/z3.zip
+          # unzip -q /tmp/z3.zip -d /tmp
+          # cp /tmp/z3-4.8.7-x64-ubuntu-16.04/bin/z3 ${{ github.workspace }}/solvers/z3-4.8.7
+          # cp /tmp/z3-4.8.7-x64-ubuntu-16.04/bin/libz3.so ${{ github.workspace }}/solvers/
+          # chmod +x ${{ github.workspace }}/solvers/z3-4.8.7
+          # rm -rf /tmp/z3.zip /tmp/z3-4.8.7-x64-ubuntu-16.04
 
       - name: Clone CVC5 repository
         run: |
@@ -394,6 +402,12 @@ jobs:
           git fetch origin
           git checkout ${{ needs.commit-fuzzer.outputs.commit_hash }}
           echo "Checked out commit: $(git rev-parse HEAD)"
+      
+      - name: Clean up git repositories to save space
+        run: |
+          # Remove .git directories from cloned repos (not needed for fuzzing)
+          rm -rf cvc5/.git yinyang/.git || true
+          echo "✅ Cleaned up git repositories"
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v5.1.0
@@ -430,6 +444,8 @@ jobs:
             ./scripts/cvc5/extract_build_artifacts.sh artifacts/artifacts.tar.gz cvc5/build false
             if [ -f "cvc5/build/bin/cvc5" ]; then
               echo "✅ Production binary extracted successfully"
+              # Remove downloaded artifact to save space
+              rm -f artifacts/artifacts.tar.gz
             else
               echo "⚠️ Binary extraction failed"
               echo "binary_available=false" >> $GITHUB_OUTPUT
@@ -449,8 +465,9 @@ jobs:
 
       - name: Verify solver binaries
         run: |
-          ${{ github.workspace }}/solvers/cvc4-1.6 --version
-          ${{ github.workspace }}/solvers/z3-4.8.7 --version
+          # Old solver versions are not used (commented out in code)
+          # ${{ github.workspace }}/solvers/cvc4-1.6 --version
+          # ${{ github.workspace }}/solvers/z3-4.8.7 --version
           z3 --version
 
       - name: Run Simple Fuzzer on assigned tests
@@ -468,9 +485,10 @@ jobs:
             --job-start-time "$JOB_START" \
             --stop-buffer-minutes ${STOP_BUFFER} \
             --iterations 2147483647 \
-            --z3-old-path ${{ github.workspace }}/solvers/z3-4.8.7 \
-            --cvc4-path ${{ github.workspace }}/solvers/cvc4-1.6 \
             --cvc5-path ./build/bin/cvc5
+            # Old solver versions are not used for now
+            # --z3-old-path ${{ github.workspace }}/solvers/z3-4.8.7 \
+            # --cvc4-path ${{ github.workspace }}/solvers/cvc4-1.6 \
       
       - name: Upload bugs as artifact
         if: always()
