@@ -50,6 +50,10 @@ jobs:
         with:
           python-version: '3.12'
       
+      - name: Install Python dependencies
+        run: |
+          pip install psutil
+      
       - name: Generate dynamic matrix
         id: generate-matrix
         run: |
