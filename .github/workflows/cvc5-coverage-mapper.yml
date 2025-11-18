@@ -22,20 +22,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
       
-      - name: Checkout CVC5 specific commit if provided
-        if: inputs.cvc5_commit_hash != ''
+      - name: Checkout CVC5 repository
         run: |
           if [ -d "cvc5" ]; then
             cd cvc5
             git fetch origin
-            git checkout ${{ inputs.cvc5_commit_hash }}
-            echo "Checked out commit: $(git rev-parse HEAD)"
           else
             git clone https://github.com/cvc5/cvc5.git cvc5
             cd cvc5
-            git checkout ${{ inputs.cvc5_commit_hash }}
-            echo "Checked out commit: $(git rev-parse HEAD)"
           fi
+      
+      - name: Checkout CVC5 specific commit if provided
+        if: inputs.cvc5_commit_hash != ''
+        run: |
+          cd cvc5
+          git checkout ${{ inputs.cvc5_commit_hash }}
+          echo "Checked out commit: $(git rev-parse HEAD)"
       
       - name: Configure CMake (for ctest discovery)
         run: |
@@ -80,20 +82,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
       
-      - name: Checkout CVC5 specific commit if provided
-        if: inputs.cvc5_commit_hash != ''
+      - name: Checkout CVC5 repository
         run: |
           if [ -d "cvc5" ]; then
             cd cvc5
             git fetch origin
-            git checkout ${{ inputs.cvc5_commit_hash }}
-            echo "Checked out commit: $(git rev-parse HEAD)"
           else
             git clone https://github.com/cvc5/cvc5.git cvc5
             cd cvc5
-            git checkout ${{ inputs.cvc5_commit_hash }}
-            echo "Checked out commit: $(git rev-parse HEAD)"
           fi
+      
+      - name: Checkout CVC5 specific commit if provided
+        if: inputs.cvc5_commit_hash != ''
+        run: |
+          cd cvc5
+          git checkout ${{ inputs.cvc5_commit_hash }}
+          echo "Checked out commit: $(git rev-parse HEAD)"
       
       - name: Build CVC5 with coverage
         run: |
