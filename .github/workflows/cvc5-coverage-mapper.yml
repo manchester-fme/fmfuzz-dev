@@ -37,9 +37,12 @@ jobs:
             echo "Checked out commit: $(git rev-parse HEAD)"
           fi
       
-      - name: Build CVC5 with coverage
+      - name: Configure CMake (for ctest discovery)
         run: |
-          ./scripts/cvc5/build.sh --coverage
+          cd cvc5
+          mkdir -p build
+          cd build
+          cmake .. -DCMAKE_BUILD_TYPE=Release
       
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -52,7 +55,6 @@ jobs:
           python3 scripts/cvc5/coverage/generate_matrix.py \
             --build-dir cvc5/build \
             --max-job-time 360 \
-            --test-timeout 2 \
             --buffer 60 \
             --output matrix.json
           

@@ -56,7 +56,6 @@ jobs:
           python3 scripts/z3/coverage/generate_matrix.py \
             --z3test-dir z3test \
             --max-job-time 360 \
-            --test-timeout 2 \
             --buffer 60 \
             --output matrix.json
           
