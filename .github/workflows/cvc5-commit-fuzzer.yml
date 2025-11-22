@@ -551,8 +551,9 @@ jobs:
         if: steps.combine-bugs.outputs.bugs_found == 'true'
         run: |
           COMMIT_HASH="${{ needs.commit-fuzzer.outputs.commit_hash }}"
+          COMMIT_SHORT="${COMMIT_HASH:0:7}"
           TIMESTAMP=$(date +%s)
-          ARCHIVE_NAME="bugs-${COMMIT_HASH}-${TIMESTAMP}.tar.gz"
+          ARCHIVE_NAME="bugs-${COMMIT_SHORT}-${TIMESTAMP}.tar.gz"
           cd combined-bugs
           tar -czf ../${ARCHIVE_NAME} .
           cd ..

@@ -120,6 +120,10 @@ def run_manager(solver: str, repo_url: str, token: Optional[str] = None):
                 print(f"⚠️  Error checking commit {commit[:8]}: {e}", file=sys.stderr)
                 continue
         
+        # Reverse the list so we add oldest commits first
+        # This ensures oldest commits are built and fuzzed first
+        new_commits_with_cpp.reverse()
+        
         for commit in new_commits_with_cpp:
             try:
                 manager.add_to_build_queue(commit)
