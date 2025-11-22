@@ -39,7 +39,8 @@ class SimpleCommitFuzzer:
         tests_root: str,
         bugs_folder: str = "bugs",
         num_workers: int = 4,
-        iterations: int = 2147483647,
+        iterations: int = 250,
+        modulo: int = 2,
         time_remaining: Optional[int] = None,
         job_start_time: Optional[float] = None,
         stop_buffer_minutes: int = 5,
@@ -52,6 +53,7 @@ class SimpleCommitFuzzer:
         self.tests_root = Path(tests_root)
         self.bugs_folder = Path(bugs_folder)
         self.iterations = iterations
+        self.modulo = modulo
         self.job_id = job_id
         self.start_time = time.time()
         
@@ -557,6 +559,7 @@ class SimpleCommitFuzzer:
         cmd = [
             "typefuzz",
             "-i", str(self.iterations),
+            "-m", str(self.modulo),
             "--timeout", "120",
             "--bugs", str(bugs_folder),
             "--scratch", str(scratch_folder),
@@ -623,9 +626,9 @@ class SimpleCommitFuzzer:
         
         elif exit_code == self.EXIT_CODE_SUCCESS:
             if not bug_files:
-                print(f"[WORKER {worker_id}] Exit code 0: No bugs found on {test_name} (runtime: {runtime:.1f}s) - removing (32 timeouts)")
-                self.stats['tests_removed_timeout'] += 1
-                return 'remove'
+                print(f"[WORKER {worker_id}] Exit code 0: No bugs found on {test_name} (runtime: {runtime:.1f}s) - requeuing for next cycle")
+                # Always requeue to create ring/queue behavior - tests cycle continuously until time expires
+                return 'requeue'
             else:
                 print(f"[WORKER {worker_id}] Exit code 0: {test_name} (runtime: {runtime:.1f}s) - bugs found, requeuing")
                 return 'requeue'
@@ -708,7 +711,7 @@ class SimpleCommitFuzzer:
         print(f"Running fuzzer on {len(self.tests)} test(s){' for job ' + self.job_id if self.job_id else ''}")
         print(f"Tests root: {self.tests_root}")
         print(f"Timeout: {self.time_remaining}s ({self.time_remaining // 60} minutes)" if self.time_remaining else "No timeout")
-        print(f"Iterations per test: {self.iterations}")
+        print(f"Iterations per test: {self.iterations}, Modulo: {self.modulo}")
         print(f"CPU cores: {self.cpu_count}")
         print(f"Workers: {self.num_workers}")
         print(f"Solvers: z3={self.z3_new}, cvc5={self.cvc5_path} --check-models --check-proofs --strings-exp")
@@ -840,8 +843,14 @@ def main():
     parser.add_argument(
         "--iterations",
         type=int,
-        default=2147483647,
-        help="Number of iterations per test (default: 2147483647)",
+        default=250,
+        help="Number of iterations per test (default: 250)",
+    )
+    parser.add_argument(
+        "--modulo",
+        type=int,
+        default=2,
+        help="Modulo parameter for typefuzz -m flag (default: 2)",
     )
     parser.add_argument(
         "--z3-old-path",
@@ -897,6 +906,7 @@ def main():
             bugs_folder=args.bugs_folder,
             num_workers=args.workers,
             iterations=args.iterations,
+            modulo=args.modulo,
             time_remaining=args.time_remaining,
             job_start_time=args.job_start_time,
             stop_buffer_minutes=args.stop_buffer_minutes,
