@@ -30,7 +30,7 @@ def get_commits_from_github(repo_url: str, since_commit: Optional[str] = None, t
     repo_path = repo_url.replace('https://github.com/', '').replace('.git', '')
     api_url = f"https://api.github.com/repos/{repo_path}/commits"
     headers = {'Authorization': f'token {token}'} if token else {}
-    params = {'per_page': 100, 'sha': since_commit} if since_commit else {'per_page': 100}
+    params = {'per_page': 100}
     
     commits = []
     page = 1
@@ -45,21 +45,14 @@ def get_commits_from_github(repo_url: str, since_commit: Optional[str] = None, t
             
             for commit in data:
                 commit_hash = commit['sha']
-                commit_date = datetime.fromisoformat(commit['commit']['author']['date'].replace('Z', '+00:00'))
-                
-                # Stop if we hit commits from yesterday or earlier
-                if commit_date.date() < datetime.now(timezone.utc).date():
-                    return commits
                 
                 # Stop if we've reached the last checked commit (we've seen all new commits)
                 if since_commit and commit_hash == since_commit:
                     return commits
                 
-                # Skip the last checked commit if we encounter it (don't add it to the list)
-                if since_commit and commit_hash == since_commit:
-                    continue
-                
-                commits.append(commit_hash)
+                # Add commit to list (skip the last checked commit itself)
+                if not (since_commit and commit_hash == since_commit):
+                    commits.append(commit_hash)
             
             if len(data) < 100:
                 break
