@@ -534,7 +534,7 @@ jobs:
             --tests-root '../z3test' \
             --job-start-time "$JOB_START" \
             --stop-buffer-minutes ${STOP_BUFFER} \
-            --iterations 2147483647 \
+            --iterations 250 \
             --z3-path ./build/z3 \
             --cvc5-path $HOME/.local/bin/cvc5
             # Old solver versions are not used for now

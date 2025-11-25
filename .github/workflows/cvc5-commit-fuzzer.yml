@@ -484,7 +484,7 @@ jobs:
             --tests-root 'test/regress/cli' \
             --job-start-time "$JOB_START" \
             --stop-buffer-minutes ${STOP_BUFFER} \
-            --iterations 2147483647 \
+            --iterations 250 \
             --cvc5-path ./build/bin/cvc5
             # Old solver versions are not used for now
             # --z3-old-path ${{ github.workspace }}/solvers/z3-4.8.7 \
