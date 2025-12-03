@@ -146,15 +146,22 @@ def run_manager(solver: str, repo_url: str, token: Optional[str] = None):
         newly_added_commits = set()
     
     # Clean up commits from fuzzing schedule if binaries are missing (7-day lifecycle)
-    # Skip binary check for commits that were just added (they haven't been built yet)
+    # Skip binary check for commits that were just added or are in build queue (being built)
     schedule = manager.get_fuzzing_schedule()
     if boto3:
         from botocore.exceptions import ClientError
         commits_to_remove = []
+        # Get current build queue to check if commits are being built
+        build_queue = manager.read_state('build-queue-v2.json', default={'queue': [], 'built': [], 'failed': []})
+        build_queue_commits = set(build_queue.get('queue', []))
+        
         for commit_info in schedule:
             commit_hash = commit_info['hash']
             # Skip binary check for commits that were just added in this run
             if commit_hash in newly_added_commits:
+                continue
+            # Skip binary check for commits that are in build queue (being built)
+            if commit_hash in build_queue_commits:
                 continue
             try:
                 s3_key = f"solvers/{solver}/builds/production/{commit_hash}.tar.gz"
