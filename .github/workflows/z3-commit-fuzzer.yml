@@ -221,7 +221,7 @@ jobs:
         run: |
           mkdir -p artifacts
           LATEST_BUILD="${{ needs.check-latest-build.outputs.latest_build }}"
-          S3_KEY="solvers/z3/builds/coverage/${LATEST_BUILD}.tar.gz"
+          S3_KEY="solvers/z3/builds/v2/coverage/${LATEST_BUILD}.tar.gz"
           
           if aws s3api head-object \
             --bucket ${{ secrets.AWS_S3_BUCKET }} \
@@ -454,7 +454,7 @@ jobs:
         run: |
           mkdir -p artifacts
           LATEST_BUILD="${{ needs.check-latest-build.outputs.latest_build }}"
-          S3_KEY="solvers/z3/builds/production/${LATEST_BUILD}.tar.gz"
+          S3_KEY="solvers/z3/builds/v2/production/${LATEST_BUILD}.tar.gz"
           
           echo "DEBUG: Checking for binary at S3 key: $S3_KEY"
           echo "DEBUG: Latest build commit: $LATEST_BUILD"
@@ -477,7 +477,7 @@ jobs:
           else
             echo "WARNING: Production binary not found in S3 at key: $S3_KEY"
             echo "DEBUG: Attempting to list objects in production directory..."
-            aws s3 ls s3://${{ secrets.AWS_S3_BUCKET }}/solvers/z3/builds/production/ | head -5 || echo "Failed to list objects"
+            aws s3 ls s3://${{ secrets.AWS_S3_BUCKET }}/solvers/z3/builds/v2/production/ | head -5 || echo "Failed to list objects"
             echo "binary_available=false" >> $GITHUB_OUTPUT
           fi
 

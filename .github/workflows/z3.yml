@@ -151,7 +151,7 @@ jobs:
         run: |
           aws s3api put-object \
             --bucket ${{ secrets.AWS_S3_BUCKET }} \
-            --key solvers/z3/builds/production/${{ steps.get-commit.outputs.commit_hash }}.tar.gz \
+            --key solvers/z3/builds/v2/production/${{ steps.get-commit.outputs.commit_hash }}.tar.gz \
             --body z3/build/artifacts.tar.gz \
             --tagging "Type=Production"
           echo "✅ Uploaded production binary to S3"
@@ -267,7 +267,7 @@ jobs:
         run: |
           aws s3api put-object \
             --bucket ${{ secrets.AWS_S3_BUCKET }} \
-            --key solvers/z3/builds/coverage/${{ steps.get-commit.outputs.commit_hash }}.tar.gz \
+            --key solvers/z3/builds/v2/coverage/${{ steps.get-commit.outputs.commit_hash }}.tar.gz \
             --body z3/build/artifacts.tar.gz \
             --tagging "Type=Coverage"
           echo "✅ Uploaded coverage binary to S3"

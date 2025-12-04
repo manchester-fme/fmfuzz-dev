@@ -329,14 +329,19 @@ class S3StateManager:
         state = self.read_state(filename, default={'last_checked_commit': None})
         return state.get('last_checked_commit')
     
-    def get_latest_available_build(self) -> Optional[str]:
+    def get_latest_available_build(self, version: Optional[str] = None) -> Optional[str]:
         """Get the latest available build commit hash from S3.
         Lists all production builds and returns the most recent one (by LastModified timestamp).
-        Returns None if no builds are available."""
+        Returns None if no builds are available.
+        
+        Args:
+            version: Version string (defaults to DEFAULT_STATE_VERSION, None for v1)
+        """
+        version = version if version is not None else DEFAULT_STATE_VERSION
         try:
             from botocore.exceptions import ClientError
             
-            prefix = f"solvers/{self.solver}/builds/production/"
+            prefix = f"solvers/{self.solver}/builds/{version}/production/"
             
             # List all objects in the production builds directory
             paginator = self.s3_client.get_paginator('list_objects_v2')
@@ -351,7 +356,7 @@ class S3StateManager:
                     continue
                 
                 for obj in page['Contents']:
-                    # Extract commit hash from key: solvers/{solver}/builds/production/{commit_hash}.tar.gz
+                    # Extract commit hash from key: solvers/{solver}/builds/{version}/production/{commit_hash}.tar.gz
                     key = obj['Key']
                     if key.endswith('.tar.gz'):
                         found_count += 1

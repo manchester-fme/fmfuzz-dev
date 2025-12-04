@@ -116,8 +116,9 @@ def run_fuzzer(solver: str, verify_binary: bool = True) -> Tuple[Optional[str], 
         
         if verify_binary:
             from botocore.exceptions import ClientError
+            from scripts.scheduling.s3_state import DEFAULT_STATE_VERSION
             
-            s3_key = f"solvers/{solver}/builds/production/{latest_build}.tar.gz"
+            s3_key = f"solvers/{solver}/builds/{DEFAULT_STATE_VERSION}/production/{latest_build}.tar.gz"
             
             try:
                 manager.s3_client.head_object(Bucket=manager.bucket, Key=s3_key)
