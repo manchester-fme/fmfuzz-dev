@@ -357,7 +357,7 @@ jobs:
           fi
 
   fuzzer-jobs:
-    needs: commit-fuzzer
+    needs: [check-latest-build, commit-fuzzer]
     if: needs.commit-fuzzer.result == 'success' && needs.commit-fuzzer.outputs.total_tests != '' && needs.commit-fuzzer.outputs.total_tests != '0'
     runs-on: ubuntu-latest
     strategy:
