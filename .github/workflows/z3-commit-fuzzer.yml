@@ -52,6 +52,8 @@ jobs:
         env:
           AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
         run: |
+          # If workflow_dispatch with commit hash provided, use that commit
+          # Otherwise (scheduled OR workflow_dispatch without commit), use fuzzer to select
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.z3_commit_hash }}" ]; then
             COMMIT_TO_FUZZ="${{ inputs.z3_commit_hash }}"
             # For manual runs, get latest build to use
@@ -68,7 +70,19 @@ jobs:
             echo "is_manual_run=true" >> $GITHUB_OUTPUT
             echo "binary_available=true" >> $GITHUB_OUTPUT
           else
-            RESULT=$(python scripts/scheduling/fuzzer.py z3 select 2>&1)
+            # Scheduled run OR workflow_dispatch without commit - use fuzzer to select
+            # Capture stdout for result, stderr for debugging
+            RESULT=$(python scripts/scheduling/fuzzer.py z3 select 2>/tmp/fuzzer_stderr.txt)
+            STDERR_OUTPUT=$(cat /tmp/fuzzer_stderr.txt 2>/dev/null || echo "")
+            echo "=== Fuzzer Debug Output ==="
+            if [ -n "$STDERR_OUTPUT" ]; then
+              echo "$STDERR_OUTPUT"
+            else
+              echo "(no stderr output)"
+            fi
+            echo "=== Fuzzer Result (stdout) ==="
+            echo "Result: '$RESULT'"
+            echo "Word count: $(echo "$RESULT" | wc -w)"
             if [ -n "$RESULT" ] && [ "$(echo "$RESULT" | wc -w)" -eq 2 ]; then
               COMMIT_TO_FUZZ=$(echo "$RESULT" | awk '{print $1}')
               LATEST_BUILD=$(echo "$RESULT" | awk '{print $2}')
