@@ -110,7 +110,7 @@ def run_fuzzer(solver: str, verify_binary: bool = True) -> Tuple[Optional[str], 
             if not latest_build:
                 print("⏭️  No builds available in S3", file=sys.stderr)
                 return None, None
-        except S3StateError as e:
+        except (S3StateError, Exception) as e:
             print(f"❌ Error getting latest build: {e}", file=sys.stderr)
             return None, None
         
