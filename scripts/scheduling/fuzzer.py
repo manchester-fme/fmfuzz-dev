@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Fuzzer job - selects least-fuzzed commit from fuzzing schedule"""
 
+import sys
 from typing import Optional
 
 from scripts.scheduling.s3_state import get_state_manager, S3StateError
