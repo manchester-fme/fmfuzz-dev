@@ -220,18 +220,19 @@ jobs:
         continue-on-error: true
         run: |
           mkdir -p artifacts
-          S3_KEY="solvers/z3/builds/coverage/${{ steps.get-commit.outputs.commit_hash }}.tar.gz"
+          LATEST_BUILD="${{ needs.check-latest-build.outputs.latest_build }}"
+          S3_KEY="solvers/z3/builds/coverage/${LATEST_BUILD}.tar.gz"
           
           if aws s3api head-object \
             --bucket ${{ secrets.AWS_S3_BUCKET }} \
             --key "$S3_KEY" >/dev/null 2>&1; then
-            echo "📥 Downloading coverage binary from S3..."
+            echo "📥 Downloading coverage binary for latest build: $LATEST_BUILD"
             aws s3 cp \
               s3://${{ secrets.AWS_S3_BUCKET }}/$S3_KEY \
               artifacts/artifacts.tar.gz
             echo "binary_available=true" >> $GITHUB_OUTPUT
           else
-            echo "WARNING: Coverage binary not found in S3, will build as fallback"
+            echo "WARNING: Coverage binary not found in S3 for $LATEST_BUILD, will build as fallback"
             echo "binary_available=false" >> $GITHUB_OUTPUT
           fi
 
