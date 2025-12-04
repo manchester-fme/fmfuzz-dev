@@ -59,7 +59,16 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.cvc5_commit_hash }}" ]; then
             COMMIT_TO_FUZZ="${{ inputs.cvc5_commit_hash }}"
             # For manual runs, get latest build to use
-            LATEST_BUILD=$(python -c "from scripts.scheduling.s3_state import get_state_manager; m = get_state_manager('cvc5'); print(m.get_latest_available_build() or '')" 2>/dev/null || echo '')
+            echo "🔍 Attempting to get latest build from S3..."
+            set +e  # Don't exit on error
+            LATEST_BUILD=$(python -c "from scripts.scheduling.s3_state import get_state_manager; m = get_state_manager('cvc5'); print(m.get_latest_available_build() or '')" 2>&1)
+            PYTHON_EXIT=$?
+            set -e  # Re-enable exit on error
+            echo "DEBUG: Python exit code: $PYTHON_EXIT"
+            echo "DEBUG: LATEST_BUILD result: '${LATEST_BUILD}'"
+            echo "DEBUG: LATEST_BUILD length: ${#LATEST_BUILD}"
+            # Extract just the commit hash (last line, filter out debug messages)
+            LATEST_BUILD=$(echo "$LATEST_BUILD" | grep -E '^[a-f0-9]{40}$' | tail -1 || echo '')
             if [ -z "$LATEST_BUILD" ]; then
               echo "⚠️  No latest build available, using provided commit as build"
               LATEST_BUILD="$COMMIT_TO_FUZZ"
