@@ -25,6 +25,8 @@ jobs:
     outputs:
       fuzzing_needed: ${{ steps.set-outputs.outputs.fuzzing_needed }}
       sha: ${{ steps.set-outputs.outputs.sha }}
+      commit_to_fuzz: ${{ steps.set-outputs.outputs.commit_to_fuzz }}
+      latest_build: ${{ steps.set-outputs.outputs.latest_build }}
       is_manual_run: ${{ steps.set-outputs.outputs.is_manual_run }}
       binary_available: ${{ steps.set-outputs.outputs.binary_available }}
     
