@@ -381,12 +381,12 @@ class S3StateManager:
             error_type = type(e).__name__
             if 'ClientError' in error_type or 'NoCredentialsError' in error_type:
                 print(f"❌ S3 ClientError listing builds: {e}", file=sys.stderr)
-                raise S3StateError(f"Failed to list builds from S3: {e}")
             else:
                 print(f"❌ Unexpected error finding latest build: {e}", file=sys.stderr)
                 import traceback
                 traceback.print_exc(file=sys.stderr)
-                raise S3StateError(f"Unexpected error finding latest build: {e}")
+            # Return None instead of raising - allows callers to handle gracefully
+            return None
 
 
 def get_state_manager(solver: str) -> S3StateManager:

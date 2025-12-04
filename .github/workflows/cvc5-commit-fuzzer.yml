@@ -59,7 +59,7 @@ jobs:
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.cvc5_commit_hash }}" ]; then
             COMMIT_TO_FUZZ="${{ inputs.cvc5_commit_hash }}"
             # For manual runs, get latest build to use
-            LATEST_BUILD=$(python -c "from scripts.scheduling.s3_state import get_state_manager; m = get_state_manager('cvc5'); print(m.get_latest_available_build() or '')")
+            LATEST_BUILD=$(python -c "from scripts.scheduling.s3_state import get_state_manager; m = get_state_manager('cvc5'); print(m.get_latest_available_build() or '')" 2>/dev/null || echo '')
             if [ -z "$LATEST_BUILD" ]; then
               echo "⚠️  No latest build available, using provided commit as build"
               LATEST_BUILD="$COMMIT_TO_FUZZ"
