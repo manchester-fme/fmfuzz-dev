@@ -304,12 +304,17 @@ jobs:
         run: |
           COMMIT_HASH="${{ needs.check-build-queue.outputs.sha }}"
           # Verify commit is still in queue before marking as built
-          IN_QUEUE=$(python scripts/scheduling/s3_state.py z3 build-queue check "$COMMIT_HASH" 2>&1 | tail -1)
+          # Capture both stdout and stderr, but only use stdout for the check
+          CHECK_OUTPUT=$(python scripts/scheduling/s3_state.py z3 build-queue check "$COMMIT_HASH" 2>&1)
+          IN_QUEUE=$(echo "$CHECK_OUTPUT" | grep -E "^(true|false)$" | tail -1)
+          echo "DEBUG: Check output: $CHECK_OUTPUT"
+          echo "DEBUG: Extracted IN_QUEUE: '$IN_QUEUE'"
           if [ "$IN_QUEUE" = "true" ]; then
             python scripts/scheduling/s3_state.py z3 build-queue move-to-built $COMMIT_HASH
             echo "✅ Moved commit $COMMIT_HASH to built state (both binaries uploaded)"
           else
             echo "⚠️  Commit $COMMIT_HASH was removed from queue, skipping mark-as-built"
+            echo "DEBUG: Full check output was: $CHECK_OUTPUT"
           fi
 
   mark-as-failed:

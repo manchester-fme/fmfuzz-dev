@@ -562,10 +562,16 @@ if __name__ == '__main__':
                 manager.clear_build_queue()
                 print(f"✅ Cleared build queue")
             elif args.action == 'check':
-                if manager.is_in_build_queue(args.commit):
-                    print("true")
+                in_queue = manager.is_in_build_queue(args.commit)
+                if in_queue:
+                    print("true", file=sys.stdout)
                 else:
-                    print("false")
+                    # Debug: check what's actually in the queue
+                    queue = manager.read_state(manager._get_versioned_filename('build-queue.json', DEFAULT_STATE_VERSION), default={'queue': [], 'built': [], 'failed': []})
+                    queue_commits = queue.get('queue', [])
+                    print(f"DEBUG: Checking commit {args.commit[:8]}", file=sys.stderr)
+                    print(f"DEBUG: Queue has {len(queue_commits)} commit(s): {[c[:8] for c in queue_commits]}", file=sys.stderr)
+                    print("false", file=sys.stdout)
             elif args.action == 'move-to-built':
                 if manager.move_to_built(args.commit):
                     print(f"✅ Moved {args.commit} to built")
