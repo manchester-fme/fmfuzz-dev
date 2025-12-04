@@ -413,6 +413,7 @@ class S3StateManager:
             
             latest_commit = None
             latest_time = None
+            found_count = 0
             
             for page in pages:
                 if 'Contents' not in page:
@@ -422,6 +423,7 @@ class S3StateManager:
                     # Extract commit hash from key: solvers/{solver}/builds/production/{commit_hash}.tar.gz
                     key = obj['Key']
                     if key.endswith('.tar.gz'):
+                        found_count += 1
                         # Extract commit hash (full 40-char hash)
                         commit_hash = key[len(prefix):-7]  # Remove prefix and .tar.gz
                         
@@ -432,10 +434,17 @@ class S3StateManager:
                             latest_time = last_modified
                             latest_commit = commit_hash
             
+            if found_count == 0:
+                print(f"⚠️  No builds found in S3 at prefix: {prefix}", file=sys.stderr)
+            else:
+                print(f"✅ Found {found_count} build(s) in S3, latest: {latest_commit[:8] if latest_commit else 'None'}", file=sys.stderr)
+            
             return latest_commit
         except ClientError as e:
+            print(f"❌ S3 ClientError listing builds: {e}", file=sys.stderr)
             raise S3StateError(f"Failed to list builds from S3: {e}")
         except Exception as e:
+            print(f"❌ Unexpected error finding latest build: {e}", file=sys.stderr)
             raise S3StateError(f"Unexpected error finding latest build: {e}")
 
 

@@ -299,13 +299,18 @@ jobs:
           aws-region: ${{ secrets.AWS_REGION }}
       
       - name: Move commit to built state
-        if: steps.check-queue.outputs.should_upload == 'true' && steps.check-queue-coverage.outputs.should_upload == 'true'
         env:
           AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
         run: |
           COMMIT_HASH="${{ needs.check-build-queue.outputs.sha }}"
-          python scripts/scheduling/s3_state.py cvc5 build-queue move-to-built $COMMIT_HASH
-          echo "✅ Moved commit $COMMIT_HASH to built state (both binaries uploaded)"
+          # Verify commit is still in queue before marking as built
+          IN_QUEUE=$(python scripts/scheduling/s3_state.py cvc5 build-queue check "$COMMIT_HASH" 2>&1 | tail -1)
+          if [ "$IN_QUEUE" = "true" ]; then
+            python scripts/scheduling/s3_state.py cvc5 build-queue move-to-built $COMMIT_HASH
+            echo "✅ Moved commit $COMMIT_HASH to built state (both binaries uploaded)"
+          else
+            echo "⚠️  Commit $COMMIT_HASH was removed from queue, skipping mark-as-built"
+          fi
 
   mark-as-failed:
     needs: [check-build-queue, build-static, build-static-coverage]
