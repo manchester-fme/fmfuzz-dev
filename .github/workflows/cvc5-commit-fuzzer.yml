@@ -54,16 +54,15 @@ jobs:
         env:
           AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
         run: |
+          set +e  # Don't exit on error - handle errors gracefully
           # If workflow_dispatch with commit hash provided, use that commit
           # Otherwise (scheduled OR workflow_dispatch without commit), use fuzzer to select
           if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.cvc5_commit_hash }}" ]; then
             COMMIT_TO_FUZZ="${{ inputs.cvc5_commit_hash }}"
             # For manual runs, get latest build to use
             echo "🔍 Attempting to get latest build from S3..."
-            set +e  # Don't exit on error
             LATEST_BUILD=$(python -c "from scripts.scheduling.s3_state import get_state_manager; m = get_state_manager('cvc5'); print(m.get_latest_available_build() or '')" 2>&1)
             PYTHON_EXIT=$?
-            set -e  # Re-enable exit on error
             echo "DEBUG: Python exit code: $PYTHON_EXIT"
             echo "DEBUG: LATEST_BUILD result: '${LATEST_BUILD}'"
             echo "DEBUG: LATEST_BUILD length: ${#LATEST_BUILD}"
@@ -83,7 +82,9 @@ jobs:
           else
             # Scheduled run OR workflow_dispatch without commit - use fuzzer to select
             # Capture stdout for result, stderr for debugging
-            RESULT=$(python scripts/scheduling/fuzzer.py cvc5 select 2>/tmp/fuzzer_stderr.txt)
+            echo "🔍 Running fuzzer.py to select commit..."
+            python scripts/scheduling/fuzzer.py cvc5 select >/tmp/fuzzer_stdout.txt 2>/tmp/fuzzer_stderr.txt || true
+            RESULT=$(cat /tmp/fuzzer_stdout.txt 2>/dev/null || echo "")
             STDERR_OUTPUT=$(cat /tmp/fuzzer_stderr.txt 2>/dev/null || echo "")
             echo "=== Fuzzer Debug Output ==="
             if [ -n "$STDERR_OUTPUT" ]; then
