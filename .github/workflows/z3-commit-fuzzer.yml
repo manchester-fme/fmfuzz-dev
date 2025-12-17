@@ -225,53 +225,52 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
 
-      - name: Download coverage binary from S3
-        id: download-coverage-binary
+      - name: Download production binary from S3 (for headers and compile_commands.json)
+        id: download-production-binary
         continue-on-error: true
         run: |
           mkdir -p artifacts
           LATEST_BUILD="${{ needs.check-latest-build.outputs.latest_build }}"
-          S3_KEY="solvers/z3/builds/v2/coverage/${LATEST_BUILD}.tar.gz"
+          S3_KEY="solvers/z3/builds/v2/production/${LATEST_BUILD}.tar.gz"
           
           if aws s3api head-object \
             --bucket ${{ secrets.AWS_S3_BUCKET }} \
             --key "$S3_KEY" >/dev/null 2>&1; then
-            echo "📥 Downloading coverage binary for latest build: $LATEST_BUILD"
+            echo "📥 Downloading production binary for latest build: $LATEST_BUILD (for headers and compile_commands.json)"
             aws s3 cp \
               s3://${{ secrets.AWS_S3_BUCKET }}/$S3_KEY \
               artifacts/artifacts.tar.gz
-            echo "binary_available=true" >> $GITHUB_OUTPUT
+            echo "artifacts_available=true" >> $GITHUB_OUTPUT
           else
-            echo "WARNING: Coverage binary not found in S3 for $LATEST_BUILD, will build as fallback"
-            echo "binary_available=false" >> $GITHUB_OUTPUT
+            echo "WARNING: Production binary not found in S3 for $LATEST_BUILD, will build as fallback"
+            echo "artifacts_available=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Extract coverage binary, headers, and compile_commands.json
-        id: extract-coverage-binary
-        if: steps.download-coverage-binary.outputs.binary_available == 'true'
+      - name: Extract headers and compile_commands.json
+        id: extract-artifacts
+        if: steps.download-production-binary.outputs.artifacts_available == 'true'
         run: |
           if [ -f "artifacts/artifacts.tar.gz" ]; then
             ./scripts/z3/extract_build_artifacts.sh artifacts/artifacts.tar.gz z3/build true
-            if [ -f "z3/build/z3" ]; then
-              echo "✅ Coverage binary extracted successfully"
+            if [ -f "z3/build/compile_commands.json" ]; then
+              echo "✅ Headers and compile_commands.json extracted successfully"
+              echo "artifacts_available=true" >> $GITHUB_OUTPUT
             else
-              echo "⚠️ Binary extraction failed"
-              echo "binary_available=false" >> $GITHUB_OUTPUT
+              echo "⚠️ compile_commands.json extraction failed"
+              echo "artifacts_available=false" >> $GITHUB_OUTPUT
             fi
           else
-            echo "binary_available=false" >> $GITHUB_OUTPUT
+            echo "artifacts_available=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Build z3 static binary with coverage (fallback)
+      - name: Build z3 static binary (fallback for headers and compile_commands.json)
+        if: steps.extract-artifacts.outputs.artifacts_available != 'true'
         run: |
-          if [ ! -f "z3/build/z3" ]; then
-            echo "🔨 Building Z3 static binary with coverage as fallback (binary not available from S3)"
-            # Set environment variables to ensure clang uses GCC 14 toolchain
-            export CXX="clang++ --gcc-toolchain=/usr"
-            export CC="clang --gcc-toolchain=/usr"
-            ./scripts/z3/build.sh --static --coverage
+          if [ ! -f "z3/build/compile_commands.json" ]; then
+            echo "🔨 Building Z3 static binary as fallback to get headers and compile_commands.json"
+            ./scripts/z3/build.sh --static
           else
-            echo "✅ Using binary from S3, skipping build"
+            echo "✅ Using artifacts from S3, skipping build"
           fi
       
       - name: Configure AWS credentials for coverage download
