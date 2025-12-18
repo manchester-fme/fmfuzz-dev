@@ -9,7 +9,7 @@ from typing import List, Optional
 scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, scripts_dir)
 
-from scheduling.s3_state import get_state_manager, S3StateError
+from scheduling.s3_state import get_state_manager, S3StateError, DEFAULT_STATE_VERSION
 from scheduling.detect_cpp_changes import detect_cpp_changes
 
 try:
@@ -23,7 +23,15 @@ except ImportError:
     boto3 = None
 
 
-def get_commits_from_github(repo_url: str, since_commit: Optional[str] = None, token: Optional[str] = None) -> List[str]:
+def get_commits_from_github(repo_url: str, since_commit: Optional[str] = None, token: Optional[str] = None, max_commits: Optional[int] = None) -> List[str]:
+    """Get commits from GitHub.
+    
+    Args:
+        repo_url: Repository URL
+        since_commit: Only fetch commits after this commit (None = start from beginning)
+        token: GitHub token
+        max_commits: Maximum number of commits to fetch (None = unlimited, used when starting fresh)
+    """
     if requests is None:
         raise RuntimeError("requests library required")
     
@@ -53,6 +61,10 @@ def get_commits_from_github(repo_url: str, since_commit: Optional[str] = None, t
                 # Add commit to list (skip the last checked commit itself)
                 if not (since_commit and commit_hash == since_commit):
                     commits.append(commit_hash)
+                    
+                    # Stop if we've reached max_commits limit
+                    if max_commits and len(commits) >= max_commits:
+                        return commits
             
             if len(data) < 100:
                 break
@@ -69,32 +81,18 @@ def run_manager(solver: str, repo_url: str, token: Optional[str] = None):
     last_checked = manager.get_last_checked_commit()
     print(f"Last checked commit: {last_checked or 'None'}")
     
+    # When starting fresh (no last_checked), limit to recent commits to avoid checking entire history
+    # We'll fetch up to 100 commits and then filter to last 4 with C++ changes
+    max_commits = None if last_checked else 100
+    
     try:
-        commits = get_commits_from_github(repo_url, last_checked, token)
+        commits = get_commits_from_github(repo_url, last_checked, token, max_commits=max_commits)
     except Exception as e:
         print(f"❌ Error getting commits: {e}", file=sys.stderr)
         sys.exit(1)
     
-    # Check built commits and move to fuzzing schedule (even if no new commits)
-    built_commits = manager.get_built_commits()
+    # Track NEW commits added from GitHub
     new_commits_added_to_schedule = []
-    if boto3:
-        from botocore.exceptions import ClientError
-        for commit in built_commits:
-            try:
-                s3_key = f"solvers/{solver}/builds/production/{commit}.tar.gz"
-                manager.s3_client.head_object(Bucket=manager.bucket, Key=s3_key)
-                manager.add_to_fuzzing_schedule(commit)
-                manager.remove_from_built(commit)
-                new_commits_added_to_schedule.append(commit)
-                print(f"✅ Moved {commit[:8]} to fuzzing schedule")
-            except ClientError as e:
-                if e.response.get('Error', {}).get('Code') == '404':
-                    print(f"⚠️  Binary not found for {commit[:8]}")
-                else:
-                    print(f"❌ Error processing {commit[:8]}: {e}", file=sys.stderr)
-            except Exception as e:
-                print(f"❌ Error processing {commit[:8]}: {e}", file=sys.stderr)
     
     # Process new commits from GitHub
     if commits:
@@ -113,43 +111,41 @@ def run_manager(solver: str, repo_url: str, token: Optional[str] = None):
                 print(f"⚠️  Error checking commit {commit[:8]}: {e}", file=sys.stderr)
                 continue
         
-        # Reverse the list so we add oldest commits first
-        # This ensures oldest commits are built and fuzzed first
-        new_commits_with_cpp.reverse()
+        # When starting fresh (no last_checked), limit to last 4 commits with C++ changes
+        # Note: commits come from GitHub API in reverse chronological order (newest first)
+        # So [:4] gets the 4 newest commits with C++ changes
+        if not last_checked and new_commits_with_cpp:
+            if len(new_commits_with_cpp) > 4:
+                print(f"📋 Starting fresh: limiting to last 4 commits with C++ changes (found {len(new_commits_with_cpp)})")
+                new_commits_with_cpp = new_commits_with_cpp[:4]  # Keep first 4 (newest)
         
-        for commit in new_commits_with_cpp:
+        if new_commits_with_cpp:
+            # Add ONLY the latest commit to build queue
+            # Commits are in reverse chronological order (newest first), so [0] is the latest
+            latest_commit = new_commits_with_cpp[0]  # First in list is latest (newest)
             try:
-                manager.add_to_build_queue(commit)
-                print(f"✅ Added {commit[:8]} to build queue")
+                manager.add_to_build_queue(latest_commit)
+                print(f"✅ Added latest commit {latest_commit[:8]} to build queue")
             except Exception as e:
-                print(f"❌ Error adding {commit[:8]} to build queue: {e}", file=sys.stderr)
+                print(f"❌ Error adding latest commit to build queue: {e}", file=sys.stderr)
+            
+            # Add ALL commits with C++ changes directly to fuzzing schedule
+            for commit in new_commits_with_cpp:
+                try:
+                    manager.add_to_fuzzing_schedule(commit)
+                    new_commits_added_to_schedule.append(commit)
+                    print(f"✅ Added {commit[:8]} to fuzzing schedule")
+                except Exception as e:
+                    print(f"❌ Error adding {commit[:8]} to fuzzing schedule: {e}", file=sys.stderr)
         
         manager.update_last_checked_commit(commits[0])
         print(f"✅ Updated last checked commit to {commits[0][:8]}")
     else:
         print("✅ No new commits to check")
     
-    # Clean up commits from fuzzing schedule if binaries are missing (7-day lifecycle)
-    schedule = manager.get_fuzzing_schedule()
-    if boto3:
-        from botocore.exceptions import ClientError
-        commits_to_remove = []
-        for commit_info in schedule:
-            commit_hash = commit_info['hash']
-            try:
-                s3_key = f"solvers/{solver}/builds/production/{commit_hash}.tar.gz"
-                manager.s3_client.head_object(Bucket=manager.bucket, Key=s3_key)
-            except ClientError as e:
-                if e.response.get('Error', {}).get('Code') == '404':
-                    commits_to_remove.append(commit_hash)
-                    print(f"⚠️  Binary missing for {commit_hash[:8]}, removing from schedule")
-        
-        for commit_hash in commits_to_remove:
-            manager.remove_from_fuzzing_schedule(commit_hash)
-        schedule = manager.get_fuzzing_schedule()
-    
-    # Manage fuzzing schedule size only when adding new commits
+    # Manage fuzzing schedule size when adding NEW commits from GitHub
     # If schedule has 4+ commits and we're adding new ones, remove oldest fuzzed commit
+    schedule = manager.get_fuzzing_schedule()
     if new_commits_added_to_schedule and len(schedule) >= 4:
         # Find oldest fuzzed commit (first in list with fuzz_count > 0)
         oldest_fuzzed = None

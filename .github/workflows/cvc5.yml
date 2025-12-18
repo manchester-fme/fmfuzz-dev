@@ -128,14 +128,38 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
       
+      - name: Check if commit is still in build queue
+        id: check-queue
+        env:
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+        run: |
+          COMMIT_HASH="${{ steps.get-commit.outputs.commit_hash }}"
+          # Capture both stdout and stderr, but extract only "true" or "false" from stdout
+          CHECK_OUTPUT=$(python scripts/scheduling/s3_state.py cvc5 build-queue check "$COMMIT_HASH" 2>&1)
+          IN_QUEUE=$(echo "$CHECK_OUTPUT" | grep -E "^(true|false)$" | tail -1)
+          if [ "$IN_QUEUE" = "true" ]; then
+            echo "✅ Commit $COMMIT_HASH is still in build queue, will upload"
+            echo "should_upload=true" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️  Commit $COMMIT_HASH was removed from queue, discarding build"
+            echo "DEBUG: Check output: $CHECK_OUTPUT"
+            echo "should_upload=false" >> $GITHUB_OUTPUT
+          fi
+      
       - name: Upload production binary to S3
+        if: steps.check-queue.outputs.should_upload == 'true'
         run: |
           aws s3api put-object \
             --bucket ${{ secrets.AWS_S3_BUCKET }} \
-            --key solvers/cvc5/builds/production/${{ steps.get-commit.outputs.commit_hash }}.tar.gz \
+            --key solvers/cvc5/builds/v2/production/${{ steps.get-commit.outputs.commit_hash }}.tar.gz \
             --body cvc5/build/artifacts.tar.gz \
             --tagging "Type=Production"
           echo "✅ Uploaded production binary to S3"
+      
+      - name: Discard build (not in queue)
+        if: steps.check-queue.outputs.should_upload == 'false'
+        run: |
+          echo "⚠️  Build discarded - commit was removed from queue"
 
   build-static-coverage:
     needs: check-build-queue
@@ -223,53 +247,42 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
       
+      - name: Check if commit is still in build queue (coverage)
+        id: check-queue-coverage
+        env:
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+        run: |
+          COMMIT_HASH="${{ steps.get-commit.outputs.commit_hash }}"
+          IN_QUEUE=$(python scripts/scheduling/s3_state.py cvc5 build-queue check "$COMMIT_HASH" 2>&1 | tail -1)
+          if [ "$IN_QUEUE" = "true" ]; then
+            echo "✅ Commit $COMMIT_HASH is still in build queue, will upload"
+            echo "should_upload=true" >> $GITHUB_OUTPUT
+          else
+            echo "⚠️  Commit $COMMIT_HASH was removed from queue, discarding build"
+            echo "should_upload=false" >> $GITHUB_OUTPUT
+          fi
+      
       - name: Upload coverage binary to S3
+        if: steps.check-queue-coverage.outputs.should_upload == 'true'
         run: |
           aws s3api put-object \
             --bucket ${{ secrets.AWS_S3_BUCKET }} \
-            --key solvers/cvc5/builds/coverage/${{ steps.get-commit.outputs.commit_hash }}.tar.gz \
+            --key solvers/cvc5/builds/v2/coverage/${{ steps.get-commit.outputs.commit_hash }}.tar.gz \
             --body cvc5/build/artifacts.tar.gz \
             --tagging "Type=Coverage"
           echo "✅ Uploaded coverage binary to S3"
-
-  mark-as-built:
-    needs: [check-build-queue, build-static, build-static-coverage]
-    if: needs.build-static.result == 'success' && needs.build-static-coverage.result == 'success'
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v5
       
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.12'
-      
-      - name: Install dependencies
-        run: pip install boto3
-      
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v5.1.0
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ secrets.AWS_REGION }}
-      
-      - name: Move commit to built state
-        env:
-          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+      - name: Discard coverage build (not in queue)
+        if: steps.check-queue-coverage.outputs.should_upload == 'false'
         run: |
-          COMMIT_HASH="${{ needs.check-build-queue.outputs.sha }}"
-          python scripts/scheduling/s3_state.py cvc5 build-queue move-to-built $COMMIT_HASH
-          echo "✅ Moved commit $COMMIT_HASH to built state (both binaries uploaded)"
+          echo "⚠️  Coverage build discarded - commit was removed from queue"
 
-  mark-as-failed:
+  remove-from-queue:
     needs: [check-build-queue, build-static, build-static-coverage]
     if: |
-      always() &&
-      needs.check-build-queue.result == 'success' &&
-      (needs.build-static.result == 'failure' || needs.build-static-coverage.result == 'failure')
+      needs.build-static.result == 'success' &&
+      needs.build-static-coverage.result == 'success' &&
+      needs.check-build-queue.outputs.build_needed == 'true'
     runs-on: ubuntu-latest
     
     steps:
@@ -291,13 +304,13 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
       
-      - name: Move commit to failed state
+      - name: Remove commit from build queue
         env:
           AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
         run: |
           COMMIT_HASH="${{ needs.check-build-queue.outputs.sha }}"
-          python scripts/scheduling/s3_state.py cvc5 build-queue move-to-failed $COMMIT_HASH
-          echo "❌ Moved commit $COMMIT_HASH to failed state (one or both builds failed)"
+          python scripts/scheduling/s3_state.py cvc5 build-queue remove "$COMMIT_HASH"
+          echo "✅ Removed $COMMIT_HASH from build queue (both binaries uploaded)"
 
   skip-build:
     needs: check-build-queue

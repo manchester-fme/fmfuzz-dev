@@ -43,8 +43,9 @@ jobs:
             # Manual trigger: check for C++ changes before adding to build queue
             COMMIT_HASH="${{ inputs.commit_hash }}"
             if python3 scripts/scheduling/detect_cpp_changes.py https://github.com/cvc5/cvc5.git "$COMMIT_HASH" --token $GITHUB_TOKEN; then
-              echo "✅ Commit $COMMIT_HASH has C++ changes, adding to build queue"
+              echo "✅ Commit $COMMIT_HASH has C++ changes, adding to build queue and fuzzing schedule"
               python3 scripts/scheduling/s3_state.py cvc5 build-queue add "$COMMIT_HASH"
+              python3 scripts/scheduling/s3_state.py cvc5 fuzzing-schedule add "$COMMIT_HASH"
             else
               echo "❌ Commit $COMMIT_HASH has no C++ changes, skipping"
               exit 1

@@ -8,15 +8,18 @@ from typing import Optional
 scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, scripts_dir)
 
-from scheduling.s3_state import get_state_manager, S3StateError
+from scheduling.s3_state import get_state_manager, S3StateError, DEFAULT_STATE_VERSION
 
 
 def get_next_commit_to_build(solver: str) -> Optional[str]:
-    """Get the next commit from build queue. Returns None if queue is empty."""
+    """Get the next commit from build queue. Returns None if queue is empty.
+    Uses LIFO (Last In, First Out) to build latest commits first."""
     manager = get_state_manager(solver)
-    queue = manager.read_state('build-queue.json', default={'queue': [], 'built': [], 'failed': []})
+    build_queue_filename = manager._get_versioned_filename('build-queue.json', DEFAULT_STATE_VERSION)
+    queue = manager.read_state(build_queue_filename, default={'queue': []})
     queue_list = queue.get('queue', [])
-    return queue_list[0] if queue_list else None
+    # Return LAST commit (most recent) instead of FIRST (oldest)
+    return queue_list[-1] if queue_list else None
 
 
 def run_builder(solver: str) -> Optional[str]:
