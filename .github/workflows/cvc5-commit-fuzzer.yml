@@ -399,7 +399,6 @@ jobs:
       - name: Install fuzzing dependencies
         run: |
           pip install antlr4-python3-runtime==4.9.2
-          pip install z3-solver
           pip install psutil
           git clone https://github.com/testsmt/yinyang.git
           cd yinyang
@@ -514,6 +513,89 @@ jobs:
           else
             echo "✅ Using binary from S3, skipping build"
           fi
+
+      - name: Get latest Z3 build from S3
+        id: get-z3-build
+        env:
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+        run: |
+          echo "🔍 Getting latest Z3 build from S3..."
+          LATEST_Z3_BUILD=$(python -c "from scripts.scheduling.s3_state import get_state_manager; m = get_state_manager('z3'); print(m.get_latest_available_build() or '')" 2>&1)
+          LATEST_Z3_BUILD=$(echo "$LATEST_Z3_BUILD" | grep -E '^[a-f0-9]{40}$' | tail -1 || echo '')
+          if [ -z "$LATEST_Z3_BUILD" ]; then
+            echo "⚠️  No latest Z3 build available"
+            echo "z3_build_available=false" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Latest Z3 build: $LATEST_Z3_BUILD"
+            echo "z3_build=$LATEST_Z3_BUILD" >> $GITHUB_OUTPUT
+            echo "z3_build_available=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download Z3 production binary from S3
+        id: download-z3-binary
+        if: steps.get-z3-build.outputs.z3_build_available == 'true'
+        continue-on-error: true
+        run: |
+          mkdir -p artifacts-z3
+          LATEST_Z3_BUILD="${{ steps.get-z3-build.outputs.z3_build }}"
+          S3_KEY="solvers/z3/builds/v2/production/${LATEST_Z3_BUILD}.tar.gz"
+          
+          echo "DEBUG: Checking for Z3 binary at S3 key: $S3_KEY"
+          echo "DEBUG: Latest Z3 build commit: $LATEST_Z3_BUILD"
+          
+          if aws s3api head-object \
+            --bucket ${{ secrets.AWS_S3_BUCKET }} \
+            --key "$S3_KEY" 2>&1; then
+            echo "✅ Z3 binary exists in S3, downloading..."
+            if aws s3 cp \
+              s3://${{ secrets.AWS_S3_BUCKET }}/$S3_KEY \
+              artifacts-z3/artifacts.tar.gz; then
+              echo "✅ Z3 binary downloaded successfully"
+              ls -lh artifacts-z3/artifacts.tar.gz
+              echo "z3_binary_available=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ Z3 binary download failed"
+              echo "z3_binary_available=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "WARNING: Z3 production binary not found in S3 at key: $S3_KEY"
+            echo "z3_binary_available=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract Z3 production binary
+        id: extract-z3-binary
+        if: steps.download-z3-binary.outputs.z3_binary_available == 'true'
+        run: |
+          if [ -f "artifacts-z3/artifacts.tar.gz" ]; then
+            mkdir -p z3/build
+            ./scripts/z3/extract_build_artifacts.sh artifacts-z3/artifacts.tar.gz z3/build false
+            if [ -f "z3/build/z3" ]; then
+              echo "✅ Z3 production binary extracted successfully"
+              # Make z3 available in PATH (prepend to ensure it takes precedence over pip-installed z3-solver)
+              mkdir -p ${{ github.workspace }}/solvers
+              cp z3/build/z3 ${{ github.workspace }}/solvers/z3
+              chmod +x ${{ github.workspace }}/solvers/z3
+              # Prepend to PATH so S3 binary is used first (GITHUB_PATH automatically prepends)
+              echo "${{ github.workspace }}/solvers" >> $GITHUB_PATH
+              # Remove downloaded artifact to save space
+              rm -f artifacts-z3/artifacts.tar.gz
+              echo "z3_binary_available=true" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ Z3 binary extraction failed"
+              echo "z3_binary_available=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "z3_binary_available=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install z3-solver as fallback
+        if: |
+          (steps.get-z3-build.outputs.z3_build_available != 'true') ||
+          (steps.download-z3-binary.outputs.z3_binary_available != 'true') ||
+          (steps.extract-z3-binary.outputs.z3_binary_available != 'true')
+        run: |
+          echo "⚠️ Z3 binary from S3 not available, installing z3-solver as fallback"
+          pip install z3-solver
 
       - name: Verify solver binaries
         run: |

@@ -416,13 +416,6 @@ jobs:
           # Clean up pip cache
           pip cache purge || true
 
-      - name: Install CVC5 oracle
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          python3 scripts/download_cvc5.py $HOME/.local/bin
-          echo "$HOME/.local/bin" >> $GITHUB_PATH
-          cvc5 --version
 
       - name: Download solver binaries
         run: |
@@ -456,6 +449,92 @@ jobs:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Get latest CVC5 build from S3
+        id: get-cvc5-build
+        env:
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+        run: |
+          echo "🔍 Getting latest CVC5 build from S3..."
+          LATEST_CVC5_BUILD=$(python -c "from scripts.scheduling.s3_state import get_state_manager; m = get_state_manager('cvc5'); print(m.get_latest_available_build() or '')" 2>&1)
+          LATEST_CVC5_BUILD=$(echo "$LATEST_CVC5_BUILD" | grep -E '^[a-f0-9]{40}$' | tail -1 || echo '')
+          if [ -z "$LATEST_CVC5_BUILD" ]; then
+            echo "⚠️  No latest CVC5 build available"
+            echo "cvc5_build_available=false" >> $GITHUB_OUTPUT
+          else
+            echo "✅ Latest CVC5 build: $LATEST_CVC5_BUILD"
+            echo "cvc5_build=$LATEST_CVC5_BUILD" >> $GITHUB_OUTPUT
+            echo "cvc5_build_available=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Download CVC5 production binary from S3
+        id: download-cvc5-binary
+        if: steps.get-cvc5-build.outputs.cvc5_build_available == 'true'
+        continue-on-error: true
+        run: |
+          mkdir -p artifacts-cvc5
+          LATEST_CVC5_BUILD="${{ steps.get-cvc5-build.outputs.cvc5_build }}"
+          S3_KEY="solvers/cvc5/builds/v2/production/${LATEST_CVC5_BUILD}.tar.gz"
+          
+          echo "DEBUG: Checking for CVC5 binary at S3 key: $S3_KEY"
+          echo "DEBUG: Latest CVC5 build commit: $LATEST_CVC5_BUILD"
+          
+          if aws s3api head-object \
+            --bucket ${{ secrets.AWS_S3_BUCKET }} \
+            --key "$S3_KEY" 2>&1; then
+            echo "✅ CVC5 binary exists in S3, downloading..."
+            if aws s3 cp \
+              s3://${{ secrets.AWS_S3_BUCKET }}/$S3_KEY \
+              artifacts-cvc5/artifacts.tar.gz; then
+              echo "✅ CVC5 binary downloaded successfully"
+              ls -lh artifacts-cvc5/artifacts.tar.gz
+              echo "cvc5_binary_available=true" >> $GITHUB_OUTPUT
+            else
+              echo "❌ CVC5 binary download failed"
+              echo "cvc5_binary_available=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "WARNING: CVC5 production binary not found in S3 at key: $S3_KEY"
+            echo "cvc5_binary_available=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Extract CVC5 production binary
+        id: extract-cvc5-binary
+        if: steps.download-cvc5-binary.outputs.cvc5_binary_available == 'true'
+        run: |
+          if [ -f "artifacts-cvc5/artifacts.tar.gz" ]; then
+            mkdir -p cvc5/build
+            ./scripts/cvc5/extract_build_artifacts.sh artifacts-cvc5/artifacts.tar.gz cvc5/build false
+            if [ -f "cvc5/build/bin/cvc5" ]; then
+              echo "✅ CVC5 production binary extracted successfully"
+              # Make cvc5 available in PATH (prepend to ensure it takes precedence)
+              mkdir -p $HOME/.local/bin
+              cp cvc5/build/bin/cvc5 $HOME/.local/bin/cvc5
+              chmod +x $HOME/.local/bin/cvc5
+              # Prepend to PATH so S3 binary is used first (GITHUB_PATH automatically prepends)
+              echo "$HOME/.local/bin" >> $GITHUB_PATH
+              # Remove downloaded artifact to save space
+              rm -f artifacts-cvc5/artifacts.tar.gz
+              echo "cvc5_binary_available=true" >> $GITHUB_OUTPUT
+            else
+              echo "⚠️ CVC5 binary extraction failed"
+              echo "cvc5_binary_available=false" >> $GITHUB_OUTPUT
+            fi
+          else
+            echo "cvc5_binary_available=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Install CVC5 oracle as fallback
+        if: |
+          (steps.get-cvc5-build.outputs.cvc5_build_available != 'true') ||
+          (steps.download-cvc5-binary.outputs.cvc5_binary_available != 'true') ||
+          (steps.extract-cvc5-binary.outputs.cvc5_binary_available != 'true')
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          echo "⚠️ CVC5 binary from S3 not available, installing from GitHub releases as fallback"
+          python3 scripts/download_cvc5.py $HOME/.local/bin
+          echo "$HOME/.local/bin" >> $GITHUB_PATH
 
       - name: Download latest production binary from S3
         id: download-production-binary
