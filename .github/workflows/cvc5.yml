@@ -312,6 +312,42 @@ jobs:
           python scripts/scheduling/s3_state.py cvc5 build-queue remove "$COMMIT_HASH"
           echo "✅ Removed $COMMIT_HASH from build queue (both binaries uploaded)"
 
+  remove-from-queue-on-failure:
+    needs: [check-build-queue, build-static, build-static-coverage]
+    if: |
+      always() &&
+      needs.check-build-queue.outputs.build_needed == 'true' &&
+      (needs.build-static.result == 'failure' || needs.build-static-coverage.result == 'failure')
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      
+      - name: Install dependencies
+        run: pip install boto3
+      
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5.1.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+      
+      - name: Remove failed commit from build queue
+        env:
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+        run: |
+          COMMIT_HASH="${{ needs.check-build-queue.outputs.sha }}"
+          echo "❌ Build failed for commit $COMMIT_HASH, removing from queue to prevent infinite retries"
+          python scripts/scheduling/s3_state.py cvc5 build-queue remove "$COMMIT_HASH"
+          echo "✅ Removed failed commit $COMMIT_HASH from build queue"
+
   skip-build:
     needs: check-build-queue
     if: needs.check-build-queue.outputs.build_needed == 'false'
