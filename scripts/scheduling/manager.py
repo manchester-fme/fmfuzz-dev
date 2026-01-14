@@ -3,7 +3,7 @@
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import List, Optional
 
 scripts_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -76,14 +76,115 @@ def get_commits_from_github(repo_url: str, since_commit: Optional[str] = None, t
     return commits
 
 
+def verify_commit_is_newer(repo_url: str, newer_commit: str, older_commit: str, token: Optional[str] = None) -> bool:
+    """Verify that newer_commit is actually newer than older_commit by comparing commit dates.
+    
+    Args:
+        repo_url: Repository URL
+        newer_commit: Commit hash that should be newer
+        older_commit: Commit hash that should be older
+        token: GitHub token
+    Returns:
+        True if newer_commit is actually newer, False otherwise
+    """
+    if requests is None:
+        return True  # Can't verify, assume correct to avoid blocking
+    
+    try:
+        repo_path = repo_url.replace('https://github.com/', '').replace('.git', '')
+        newer_date = None
+        older_date = None
+        
+        # Get both commit dates
+        for commit_hash, commit_type in [(newer_commit, "newer"), (older_commit, "older")]:
+            api_url = f"https://api.github.com/repos/{repo_path}/commits/{commit_hash}"
+            headers = {'Authorization': f'token {token}'} if token else {}
+            
+            response = requests.get(api_url, headers=headers, timeout=10)
+            response.raise_for_status()
+            data = response.json()
+            
+            commit_date_str = data.get('commit', {}).get('author', {}).get('date')
+            if commit_date_str:
+                commit_date = datetime.fromisoformat(commit_date_str.replace('Z', '+00:00'))
+                if commit_type == "newer":
+                    newer_date = commit_date
+                else:
+                    older_date = commit_date
+        
+        # Verify we got both dates
+        if newer_date is None or older_date is None:
+            print(f"⚠️  Could not get commit dates for verification, assuming correct order", file=sys.stderr)
+            return True
+        
+        # Verify newer_commit is actually newer
+        if newer_date <= older_date:
+            print(f"❌ ERROR: Commit {newer_commit[:8]} ({newer_date}) is NOT newer than {older_commit[:8]} ({older_date})", file=sys.stderr)
+            return False
+        
+        return True
+    except Exception as e:
+        print(f"⚠️  Error verifying commit order: {e}", file=sys.stderr)
+        # If we can't verify, assume correct to avoid blocking (but log warning)
+        return True
+
+
+def check_if_commit_too_old(repo_url: str, commit_hash: str, token: Optional[str] = None, max_age_days: int = 30) -> bool:
+    """Check if a commit is too old (older than max_age_days).
+    
+    Args:
+        repo_url: Repository URL
+        commit_hash: Commit hash to check
+        token: GitHub token
+        max_age_days: Maximum age in days (default: 30)
+    Returns:
+        True if commit is too old, False otherwise
+    """
+    if requests is None:
+        return False  # Can't check, assume not too old
+    
+    try:
+        repo_path = repo_url.replace('https://github.com/', '').replace('.git', '')
+        api_url = f"https://api.github.com/repos/{repo_path}/commits/{commit_hash}"
+        headers = {'Authorization': f'token {token}'} if token else {}
+        
+        response = requests.get(api_url, headers=headers, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        # Get commit date
+        commit_date_str = data.get('commit', {}).get('author', {}).get('date')
+        if commit_date_str:
+            commit_date = datetime.fromisoformat(commit_date_str.replace('Z', '+00:00'))
+            age_days = (datetime.now(timezone.utc) - commit_date).days
+            return age_days > max_age_days
+    except Exception as e:
+        print(f"⚠️  Error checking commit age for {commit_hash[:8]}: {e}", file=sys.stderr)
+        # If we can't check, assume it's not too old to be safe
+        return False
+    
+    return False
+
+
 def run_manager(solver: str, repo_url: str, token: Optional[str] = None):
     manager = get_state_manager(solver)
     last_checked = manager.get_last_checked_commit()
     print(f"Last checked commit: {last_checked or 'None'}")
     
-    # When starting fresh (no last_checked), limit to recent commits to avoid checking entire history
-    # We'll fetch up to 100 commits and then filter to last 4 with C++ changes
-    max_commits = None if last_checked else 100
+    # Check if last_checked commit is too old (e.g., > 30 days)
+    # If too old, treat as "starting fresh" to avoid fetching thousands of commits
+    old_commit_reset = False
+    if last_checked:
+        is_too_old = check_if_commit_too_old(repo_url, last_checked, token, max_age_days=30)
+        if is_too_old:
+            print(f"⚠️  Last checked commit {last_checked[:8]} is too old (>30 days), resetting to start fresh")
+            old_commit_reset = True
+            last_checked = None
+            # Note: We'll update last_checked_commit at the end with the new commit
+    
+    # Always limit max_commits to prevent fetching too many commits
+    # Even if last_checked exists, limit to reasonable number to avoid rate limits
+    max_commits = 200 if last_checked else 100
     
     try:
         commits = get_commits_from_github(repo_url, last_checked, token, max_commits=max_commits)
@@ -94,9 +195,21 @@ def run_manager(solver: str, repo_url: str, token: Optional[str] = None):
     # Track NEW commits added from GitHub
     new_commits_added_to_schedule = []
     
+    # Track errors during processing - if too many, fail rather than update state incorrectly
+    processing_errors = 0
+    max_processing_errors = 10  # Allow some errors (rate limits, etc.) but fail if too many
+    
     # Process new commits from GitHub
     if commits:
         print(f"Found {len(commits)} commit(s) to check")
+        
+        # CRITICAL VALIDATION: If we had a last_checked commit, verify commits[0] is actually newer
+        # This prevents updating to an old commit if something went wrong
+        if last_checked and commits[0] != last_checked:
+            if not verify_commit_is_newer(repo_url, commits[0], last_checked, token):
+                print(f"❌ FATAL: Newest commit {commits[0][:8]} is not newer than last_checked {last_checked[:8]}", file=sys.stderr)
+                print(f"❌ Aborting to prevent updating state to incorrect commit", file=sys.stderr)
+                sys.exit(1)
         
         new_commits_with_cpp = []
         for commit in commits:
@@ -108,7 +221,12 @@ def run_manager(solver: str, repo_url: str, token: Optional[str] = None):
                 else:
                     print(f"⏭️  Commit {commit[:8]} has no C++ changes")
             except Exception as e:
+                processing_errors += 1
                 print(f"⚠️  Error checking commit {commit[:8]}: {e}", file=sys.stderr)
+                if processing_errors > max_processing_errors:
+                    print(f"❌ FATAL: Too many errors ({processing_errors}) during commit processing", file=sys.stderr)
+                    print(f"❌ Aborting to prevent updating state incorrectly", file=sys.stderr)
+                    sys.exit(1)
                 continue
         
         # When starting fresh (no last_checked), limit to last 4 commits with C++ changes
@@ -138,10 +256,42 @@ def run_manager(solver: str, repo_url: str, token: Optional[str] = None):
                 except Exception as e:
                     print(f"❌ Error adding {commit[:8]} to fuzzing schedule: {e}", file=sys.stderr)
         
-        manager.update_last_checked_commit(commits[0])
-        print(f"✅ Updated last checked commit to {commits[0][:8]}")
+        # Update last_checked_commit to the newest commit (commits[0] is newest since GitHub API returns reverse chronological order)
+        # This ensures we don't re-check commits we've already processed
+        # IMPORTANT: commits[0] should always be HEAD (newest commit) when fetched from GitHub API
+        # If last_checked was set, commits[0] is the first commit AFTER last_checked (i.e., newer)
+        # If last_checked was None, commits[0] is HEAD (newest)
+        # 
+        # FAIL-SAFE: Only update if we didn't have too many processing errors
+        # This prevents updating state when something went wrong
+        if processing_errors > max_processing_errors:
+            print(f"❌ FATAL: Too many processing errors ({processing_errors}). Not updating last_checked_commit to prevent incorrect state.", file=sys.stderr)
+            sys.exit(1)
+        
+        newest_commit = commits[0]
+        manager.update_last_checked_commit(newest_commit)
+        print(f"✅ Updated last checked commit to {newest_commit[:8]} (newest commit from fetched batch)")
+        
+        if last_checked and last_checked != newest_commit:
+            print(f"📝 Updated from {last_checked[:8]} to {newest_commit[:8]}")
     else:
         print("✅ No new commits to check")
+        # If we reset due to old commit but got no commits, update to HEAD to prevent re-checking
+        if old_commit_reset:
+            print("⚠️  Old commit was reset but no commits found, fetching HEAD to update state")
+            try:
+                # Get HEAD commit to update state
+                repo_path = repo_url.replace('https://github.com/', '').replace('.git', '')
+                api_url = f"https://api.github.com/repos/{repo_path}/commits/HEAD"
+                headers = {'Authorization': f'token {token}'} if token else {}
+                response = requests.get(api_url, headers=headers, timeout=10)
+                response.raise_for_status()
+                head_commit = response.json().get('sha')
+                if head_commit:
+                    manager.update_last_checked_commit(head_commit)
+                    print(f"✅ Updated last checked commit to HEAD: {head_commit[:8]}")
+            except Exception as e:
+                print(f"⚠️  Could not update last checked commit to HEAD: {e}", file=sys.stderr)
     
     # Manage fuzzing schedule size when adding NEW commits from GitHub
     # If schedule has 4+ commits and we're adding new ones, remove oldest fuzzed commit
