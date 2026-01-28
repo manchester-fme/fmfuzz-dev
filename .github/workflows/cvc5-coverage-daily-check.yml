@@ -39,7 +39,7 @@ jobs:
           python-version: '3.12'
 
       - name: Install Python dependencies
-        run: pip install boto3
+        run: pip install boto3 psutil
 
       - name: Count tests
         id: count-tests
