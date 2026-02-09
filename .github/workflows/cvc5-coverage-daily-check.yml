@@ -1,0 +1,108 @@
+name: CVC5 Coverage Daily Check
+
+on:
+  schedule:
+    - cron: '0 0 * * *'  # Daily at midnight UTC
+  workflow_dispatch:  # Allow manual triggering for testing
+
+jobs:
+  check-rebuild-needed:
+    runs-on: ubuntu-latest
+    outputs:
+      should_rebuild: ${{ steps.check-state.outputs.should_rebuild }}
+      reason: ${{ steps.check-state.outputs.reason }}
+      test_count: ${{ steps.count-tests.outputs.test_count }}
+      commit_hash: ${{ steps.count-tests.outputs.commit_hash }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Checkout CVC5 repository
+        run: |
+          if [ -d "cvc5" ]; then
+            cd cvc5
+            git fetch origin
+          else
+            git clone https://github.com/cvc5/cvc5.git cvc5
+            cd cvc5
+          fi
+
+      - name: Configure CMake (for ctest discovery)
+        run: |
+          cd cvc5
+          ./configure.sh production --auto-download
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Python dependencies
+        run: pip install boto3 psutil
+
+      - name: Count tests
+        id: count-tests
+        run: |
+          python3 scripts/coverage/count_tests.py cvc5 \
+            --build-dir cvc5/build \
+            --output test-count.json
+
+          TEST_COUNT=$(jq -r '.test_count' test-count.json)
+          COMMIT_HASH=$(jq -r '.commit_hash' test-count.json)
+
+          echo "test_count=$TEST_COUNT" >> $GITHUB_OUTPUT
+          echo "commit_hash=$COMMIT_HASH" >> $GITHUB_OUTPUT
+
+          echo "✅ Found $TEST_COUNT tests at commit ${COMMIT_HASH:0:8}"
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5.1.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Check if rebuild needed
+        id: check-state
+        env:
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          python3 scripts/coverage/coverage_state.py cvc5 check \
+            --test-count ${{ steps.count-tests.outputs.test_count }} \
+            --output decision.json
+
+          SHOULD_REBUILD=$(jq -r '.should_rebuild' decision.json)
+          REASON=$(jq -r '.reason' decision.json)
+
+          echo "should_rebuild=$SHOULD_REBUILD" >> $GITHUB_OUTPUT
+          echo "reason=$REASON" >> $GITHUB_OUTPUT
+
+          if [ "$SHOULD_REBUILD" = "true" ]; then
+            echo "✅ Decision: REBUILD - $REASON"
+          else
+            echo "⏭️  Decision: SKIP - $REASON"
+          fi
+
+  trigger-coverage-build:
+    needs: check-rebuild-needed
+    if: needs.check-rebuild-needed.outputs.should_rebuild == 'true'
+    uses: ./.github/workflows/cvc5-coverage-mapper.yml
+    with:
+      cvc5_commit_hash: ${{ needs.check-rebuild-needed.outputs.commit_hash }}
+      test_count: ${{ fromJSON(needs.check-rebuild-needed.outputs.test_count) }}
+    secrets: inherit
+
+  skip-build:
+    needs: check-rebuild-needed
+    if: needs.check-rebuild-needed.outputs.should_rebuild == 'false'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Log skip reason
+        run: |
+          echo "⏭️  Skipping coverage build"
+          echo "Reason: ${{ needs.check-rebuild-needed.outputs.reason }}"
+          echo "Test count: ${{ needs.check-rebuild-needed.outputs.test_count }}"
+          echo "Commit: ${{ needs.check-rebuild-needed.outputs.commit_hash }}"

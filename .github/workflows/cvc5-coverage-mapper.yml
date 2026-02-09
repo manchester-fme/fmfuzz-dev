@@ -1,12 +1,33 @@
 name: CVC5 Coverage Mapper
 
 on:
+  workflow_call:
+    inputs:
+      cvc5_commit_hash:
+        description: 'CVC5 commit hash to build coverage for'
+        required: false
+        type: string
+      test_count:
+        description: 'Pre-counted test count (optional optimization)'
+        required: false
+        type: number
+    secrets:
+      AWS_ACCESS_KEY_ID:
+        required: true
+      AWS_SECRET_ACCESS_KEY:
+        required: true
+      AWS_REGION:
+        required: true
+      AWS_S3_BUCKET:
+        required: true
+
   workflow_dispatch:
     inputs:
       cvc5_commit_hash:
         description: 'Optional: CVC5 commit hash to build coverage mapping for (defaults to HEAD)'
         required: false
         type: string
+
   schedule:
     - cron: '0 0 1 * *'  # Run on the 1st of every month at midnight UTC (approximately every 30 days)
 
@@ -120,7 +141,9 @@ jobs:
   join-mappings:
     runs-on: ubuntu-latest
     needs: [discover-tests, coverage-analysis]
-    
+    outputs:
+      commit_hash: ${{ steps.get-commit.outputs.commit_hash }}
+
     steps:
       - name: Checkout
         uses: actions/checkout@v5
@@ -181,3 +204,40 @@ jobs:
           echo "✅ Uploaded coverage mapping to S3"
           echo "S3 path: s3://${{ secrets.AWS_S3_BUCKET }}/${S3_KEY}"
           echo "Commit hash: ${COMMIT_HASH}"
+
+  # Update coverage state after successful build
+  update-state:
+    runs-on: ubuntu-latest
+    needs: [discover-tests, join-mappings]
+    if: success()
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install boto3
+        run: pip install boto3
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v5.1.0
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Update coverage state
+        env:
+          AWS_S3_BUCKET: ${{ secrets.AWS_S3_BUCKET }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+        run: |
+          python3 scripts/coverage/coverage_state.py cvc5 update \
+            --test-count ${{ needs.discover-tests.outputs.total_tests }} \
+            --commit-hash ${{ needs.join-mappings.outputs.commit_hash }} \
+            --updated-by "${{ github.workflow }}"
+
+          echo "✅ Updated coverage state: ${{ needs.discover-tests.outputs.total_tests }} tests"
