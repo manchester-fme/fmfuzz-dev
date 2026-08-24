@@ -75,11 +75,12 @@ def fetch_oidc_token(audience: str = 'sts.amazonaws.com') -> str:
             '`permissions: id-token: write` to use the r2-broker storage provider.'
         )
     # GitHub's OIDC token endpoint is occasionally slow under load (seen
-    # timing out past 10s with no server-side issue on our end) - retry a
-    # couple of times rather than letting one slow request fail the whole
+    # timing out past 10s with no server-side issue on our end, and past
+    # 20s during at least one manager run) - retry several times with
+    # growing backoff rather than letting one slow request fail the whole
     # job, since every r2-broker call depends on this token.
     last_error: Optional[Exception] = None
-    for attempt in range(3):
+    for attempt in range(5):
         if attempt > 0:
             time.sleep(2 * attempt)
         try:
@@ -87,7 +88,7 @@ def fetch_oidc_token(audience: str = 'sts.amazonaws.com') -> str:
                 request_url,
                 params={'audience': audience},
                 headers={'Authorization': f'Bearer {request_token}'},
-                timeout=10,
+                timeout=20,
             )
             resp.raise_for_status()
             return resp.json()['value']

@@ -653,7 +653,7 @@ jobs:
             [ -z "$pkg" ] && continue
             pip install "$pkg"
           done < <(jq -r '.fuzzer.extra_pip_packages[]' "$MANIFEST")
-          git clone https://github.com/testsmt/yinyang.git
+          git clone --branch v0.3.1 --depth 1 https://github.com/testsmt/yinyang.git
           cd yinyang
           pip install -e .
           cd ..
