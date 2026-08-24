@@ -131,8 +131,14 @@ def build_report(path, target_cmd, oracle_cmd, kind, msg, commit_hash=None):
 
 
 def find_existing_issue(title, repo=None):
+    """Search open and closed issues for an exact title match. Callers must
+    check the returned item's state themselves -- a closed match means the
+    bug was previously fixed, not that it's still an open duplicate, so it
+    should not by itself suppress filing a new report (see #67: this is
+    what makes a regression of a fixed bug reappear as a fresh issue
+    instead of being silently swallowed)."""
     cmd = ["gh", "issue", "list", "--search", f'"{title}" in:title', "--state", "all",
-           "--json", "number,title,url", "--limit", "5"]
+           "--json", "number,title,url,state", "--limit", "5"]
     if repo:
         cmd += ["--repo", repo]
     result = subprocess.run(cmd, capture_output=True, text=True)
@@ -179,9 +185,13 @@ def report(path, target_cmd, oracle_cmd, post, out, repo=None, commit_hash=None)
         error("gh is not authenticated -- run `gh auth login` first")
 
     existing = find_existing_issue(title, repo)
-    if existing:
-        print(f"an issue with this exact title already exists: {existing['url']} -- not filing a duplicate")
+    if existing and existing["state"] == "OPEN":
+        print(f"an open issue with this exact title already exists: {existing['url']} -- not filing a duplicate")
         return
+
+    if existing:  # closed -- possible regression, file a new report but link the old one
+        print(f"a closed issue with this exact title exists: {existing['url']} -- filing as a possible regression")
+        body += f"\nPossible regression of #{existing['number']} (closed): {existing['url']}\n"
 
     post_issue(title, body, repo)
 
